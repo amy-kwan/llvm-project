@@ -3027,7 +3027,20 @@ unsigned PPCInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
     (void)F.getFnAttribute("patchable-function-entry")
         .getValueAsString()
         .getAsInteger(10, Num);
-    return Num * 4;
+    if (Num)
+      return Num * 4;
+    // When XRay is used on PPC64LE, seven instructions are emitted:
+    // B, NOP, STD, MFLR8, BL8_NOP (bl+nop), MTLR8 = 7 instructions.
+    // The AsmPrinter verifies that the instruction size reported by InstrInfo
+    // matches the actual emitted size. However, under XRay and when the
+    // `patchable-function-entry` function attribute is not present, we
+    // run into the situation where the expected number of bytes are 0,
+    // when the actual number of bytes are 28 (7 instructions * 4 bytes).
+    // Specifically check for the XRay path and return the appropriate
+    // number of bytes accordingly.
+    if (Subtarget.isXRaySupported())
+      return 7 * 4;  // 28 bytes
+    return 0;
   }
   default:
     return get(Opcode).getSize();
