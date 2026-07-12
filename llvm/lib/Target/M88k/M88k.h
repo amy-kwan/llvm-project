@@ -17,8 +17,11 @@
 #include "llvm/Support/CodeGen.h"
 
 namespace llvm {
+class M88kRegisterBankInfo;
+class M88kSubtarget;
 class M88kTargetMachine;
 class FunctionPass;
+class InstructionSelector;
 class PassRegistry;
 
 FunctionPass *createM88kISelDag(M88kTargetMachine &TM,
@@ -26,5 +29,8 @@ FunctionPass *createM88kISelDag(M88kTargetMachine &TM,
 
 void initializeM88kDAGToDAGISelPass(PassRegistry &);
 
+InstructionSelector *
+createM88kInstructionSelector(const M88kTargetMachine &, const M88kSubtarget &,
+                              const M88kRegisterBankInfo &);
 } // end namespace llvm
 #endif

@@ -12,6 +12,10 @@
 #include "M88kTargetMachine.h"
 #include "M88k.h"
 #include "TargetInfo/M88kTargetInfo.h"
+#include "llvm/CodeGen/GlobalISel/IRTranslator.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
+#include "llvm/CodeGen/GlobalISel/Legalizer.h"
+#include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -120,6 +124,12 @@ public:
 
   bool addInstSelector() override;
   void addPreEmitPass() override;
+
+  // GlobalISEL
+  bool addIRTranslator() override;
+  bool addLegalizeMachineIR() override;
+  bool addRegBankSelect() override;
+  bool addGlobalInstructionSelect() override;
 };
 } // namespace
 
@@ -136,4 +146,25 @@ bool M88kPassConfig::addInstSelector() {
 
 void M88kPassConfig::addPreEmitPass() {
   // TODO Add pass for div-by-zero check.
+}
+
+// Global ISEL
+bool M88kPassConfig::addIRTranslator() {
+  addPass(new IRTranslator());
+  return false;
+}
+
+bool M88kPassConfig::addLegalizeMachineIR() {
+  addPass(new Legalizer());
+  return false;
+}
+
+bool M88kPassConfig::addRegBankSelect() {
+  addPass(new RegBankSelect());
+  return false;
+}
+
+bool M88kPassConfig::addGlobalInstructionSelect() {
+  addPass(new InstructionSelect(getOptLevel()));
+  return false;
 }
