@@ -368,6 +368,7 @@ printMemberHeader(raw_ostream &Out, uint64_t Pos, raw_ostream &StringTable,
 namespace {
 struct MemberData {
   std::vector<unsigned> Symbols;
+  std::vector<uint32_t> SymbolAttributes; // z/OS only: parallel to Symbols
   std::string Header;
   StringRef Data;
   StringRef Padding;
@@ -378,6 +379,38 @@ struct MemberData {
 };
 } // namespace
 
+/// Compute the z/OS symbol attribute bits for a single symbol.
+/// The attribute is a 3-bit value:
+///   bit 2 (0x4): 64-bit AMODE
+///   bit 1 (0x2): XPLink linkage
+///   bit 0 (0x1): Writable Static Area (Parts namespace)
+static uint32_t getZOSSymbolAttribute(const object::BasicSymbolRef &S) {
+  // Only GOFF object files carry the ESD information needed.
+  auto *GOFF = dyn_cast<object::GOFFObjectFile>(S.getObject());
+  if (!GOFF)
+    return 0;
+
+  const uint8_t *ESD = GOFF->getSymbolEsdRecord(S.getRawDataRefImpl());
+
+  GOFF::ESDAmode Amode;
+  ESDRecord::getAmode(ESD, Amode);
+
+  GOFF::ESDLinkageType Linkage;
+  ESDRecord::getLinkageType(ESD, Linkage);
+
+  GOFF::ESDNameSpaceId NS;
+  ESDRecord::getNameSpaceId(ESD, NS);
+
+  uint32_t Attr = 0;
+  if (Amode == GOFF::ESD_AMODE_64)
+    Attr |= 0x4;
+  if (Linkage == GOFF::ESD_LT_XPLink)
+    Attr |= 0x2;
+  if (NS == GOFF::ESD_NS_Parts)
+    Attr |= 0x1;
+  return Attr;
+}
+
 static MemberData computeStringTable(StringRef Names) {
   unsigned Size = Names.size();
   unsigned Pad = offsetToAlignment(Size, Align(2));
@@ -386,7 +419,8 @@ static MemberData computeStringTable(StringRef Names) {
   printWithSpacePadding(Out, "//", 48);
   printWithSpacePadding(Out, Size + Pad, 10);
   Out << "`\n";
-  return {{}, std::move(Header), Names, Pad ? "\n" : ""};
+  return {/*Symbols=*/{}, /*SymbolAttributes=*/{}, std::move(Header), Names,
+          Pad ? "\n" : ""};
 }
 
 static sys::TimePoint<std::chrono::seconds> now(bool Deterministic) {
@@ -677,13 +711,15 @@ static void writeSymbolTable(raw_ostream &Out, object::Archive::Kind Kind,
       }
     }
 
-    for (unsigned StringOffset : M.Symbols) {
+    for (size_t SI = 0, SE = M.Symbols.size(); SI != SE; ++SI) {
       if (isBSDLike(Kind))
-        printNBits(Out, Kind, StringOffset);
+        printNBits(Out, Kind, M.Symbols[SI]);
       printNBits(Out, Kind, Pos); // member offset
-      // FIXME: Properly handle symbol attributes for z/OS archives.
-      if (isZOSArchive(Kind))
-        printNBits(Out, Kind, 0); // symbol flags
+      if (isZOSArchive(Kind)) {
+        uint32_t Attr =
+            SI < M.SymbolAttributes.size() ? M.SymbolAttributes[SI] : 0;
+        printNBits(Out, Kind, Attr); // symbol flags
+      }
     }
     Pos += M.Header.size() + M.Data.size() + M.Padding.size();
   }
@@ -797,10 +833,10 @@ bool isImportDescriptor(StringRef Name) {
           Name.ends_with(NullThunkDataSuffix));
 }
 
-static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
-                                                  uint16_t Index,
-                                                  raw_ostream &SymNames,
-                                                  SymMap *SymMap) {
+static Expected<std::vector<unsigned>>
+getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
+           SymMap *SymMap, object::Archive::Kind Kind,
+           std::vector<uint32_t> *Attrs) {
   std::vector<unsigned> Ret;
 
   if (Obj == nullptr)
@@ -823,6 +859,8 @@ static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
       if (Map == &SymMap->Map) {
         Ret.push_back(SymNames.tell());
         SymNames << Name << '\0';
+        if (isZOSArchive(Kind) && Attrs)
+          Attrs->push_back(getZOSSymbolAttribute(S));
         // If EC is enabled, then the import descriptors are NOT put into EC
         // objects so we need to copy them to the EC map manually.
         if (SymMap->UseECMap && isImportDescriptor(Name))
@@ -833,6 +871,8 @@ static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
       if (Error E = S.printName(SymNames))
         return std::move(E);
       SymNames << '\0';
+      if (isZOSArchive(Kind) && Attrs)
+        Attrs->push_back(getZOSSymbolAttribute(S));
     }
   }
   return Ret;
@@ -1072,8 +1112,11 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     }
 
     if (NeedSymbols != SymtabWritingMode::NoSymtab) {
+      std::vector<uint32_t> *AttrsPtr =
+          isZOSArchive(Kind) ? &D.SymbolAttributes : nullptr;
       Expected<std::vector<unsigned>> SymbolsOrErr =
-          getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap);
+          getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap, Kind,
+                     AttrsPtr);
       if (!SymbolsOrErr)
         return createFileError(MemberName, SymbolsOrErr.takeError());
       D.Symbols = std::move(*SymbolsOrErr);
@@ -1087,6 +1130,7 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     //   - should not find any references to a blank symbol
     if ((LastZosObjIndex == Index) && (SymNames.tell() == 0)) {
       D.Symbols.push_back(0);
+      D.SymbolAttributes.push_back(0); // dummy blank symbol has no attributes
       SymNames << ' ' << '\0';
     }
 
