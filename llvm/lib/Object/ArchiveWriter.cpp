@@ -389,7 +389,7 @@ static MemberData computeStringTable(StringRef Names) {
   printWithSpacePadding(Out, "//", 48);
   printWithSpacePadding(Out, Size + Pad, 10);
   Out << "`\n";
-  return {{}, std::move(Header), Names, Pad ? "\n" : ""};
+  return {{}, {}, std::move(Header), Names, Pad ? "\n" : ""};
 }
 
 static sys::TimePoint<std::chrono::seconds> now(bool Deterministic) {
