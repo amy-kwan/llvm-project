@@ -375,6 +375,43 @@ GOFFObjectFile::getSymbolSection(DataRefImpl Symb) const {
                                std::to_string(SymEdId));
 }
 
+uint32_t GOFFObjectFile::getZOSSymbolAttributes(DataRefImpl Symb) const {
+  const uint8_t *EsdRecord = getSymbolEsdRecord(Symb);
+
+  // Navigate to the parent ED record, which holds AMODE, linkage, and
+  // loading behavior for the section the symbol belongs to.
+  uint32_t ParentEsdId;
+  ESDRecord::getParentEsdId(EsdRecord, ParentEsdId);
+  const uint8_t *EdRecord =
+      ParentEsdId ? EsdPtrs[ParentEsdId] : EsdRecord;
+
+  uint32_t Attrs = 0;
+
+  // Bit 2 (0x4): 64-bit — AMODE is ESD_AMODE_64.
+  GOFF::ESDAmode Amode;
+  ESDRecord::getAmode(EdRecord, Amode);
+  if (Amode == GOFF::ESD_AMODE_64)
+    Attrs |= 0x4;
+
+  // Bit 1 (0x2): XPLink — LinkageType is ESD_LT_XPLink.
+  GOFF::ESDLinkageType LinkageType;
+  ESDRecord::getLinkageType(EdRecord, LinkageType);
+  if (LinkageType == GOFF::ESD_LT_XPLink)
+    Attrs |= 0x2;
+
+  // Bit 0 (0x1): Writable Static Area — section is data and not read-only
+  // (LoadingBehavior != ESD_LB_Initial).
+  GOFF::ESDExecutable Executable;
+  ESDRecord::getExecutable(EdRecord, Executable);
+  GOFF::ESDLoadingBehavior LoadingBehavior;
+  ESDRecord::getLoadingBehavior(EdRecord, LoadingBehavior);
+  if (Executable == GOFF::ESD_EXE_DATA &&
+      LoadingBehavior != GOFF::ESD_LB_Initial)
+    Attrs |= 0x1;
+
+  return Attrs;
+}
+
 uint64_t GOFFObjectFile::getSymbolSize(DataRefImpl Symb) const {
   const uint8_t *Record = getSymbolEsdRecord(Symb);
   uint32_t Length;

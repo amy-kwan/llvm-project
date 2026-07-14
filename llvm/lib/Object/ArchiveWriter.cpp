@@ -368,6 +368,9 @@ printMemberHeader(raw_ostream &Out, uint64_t Pos, raw_ostream &StringTable,
 namespace {
 struct MemberData {
   std::vector<unsigned> Symbols;
+  // Parallel to Symbols: z/OS archive attribute bits per symbol.
+  // Entry i corresponds to Symbols[i]. Empty for non-z/OS archives.
+  std::vector<uint32_t> SymbolAttrs;
   std::string Header;
   StringRef Data;
   StringRef Padding;
@@ -677,13 +680,15 @@ static void writeSymbolTable(raw_ostream &Out, object::Archive::Kind Kind,
       }
     }
 
-    for (unsigned StringOffset : M.Symbols) {
+    for (size_t I = 0, E = M.Symbols.size(); I != E; ++I) {
       if (isBSDLike(Kind))
-        printNBits(Out, Kind, StringOffset);
+        printNBits(Out, Kind, M.Symbols[I]);
       printNBits(Out, Kind, Pos); // member offset
-      // FIXME: Properly handle symbol attributes for z/OS archives.
-      if (isZOSArchive(Kind))
-        printNBits(Out, Kind, 0); // symbol flags
+      if (isZOSArchive(Kind)) {
+        uint32_t Attrs =
+            I < M.SymbolAttrs.size() ? M.SymbolAttrs[I] : 0;
+        printNBits(Out, Kind, Attrs); // symbol flags
+      }
     }
     Pos += M.Header.size() + M.Data.size() + M.Padding.size();
   }
@@ -798,10 +803,9 @@ bool isImportDescriptor(StringRef Name) {
           Name.ends_with(NullThunkDataSuffix));
 }
 
-static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
-                                                  uint16_t Index,
-                                                  raw_ostream &SymNames,
-                                                  SymMap *SymMap) {
+static Expected<std::vector<unsigned>>
+getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
+           SymMap *SymMap, std::vector<uint32_t> *SymbolAttrs = nullptr) {
   std::vector<unsigned> Ret;
 
   if (Obj == nullptr)
@@ -810,6 +814,9 @@ static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
   std::map<std::string, uint16_t> *Map = nullptr;
   if (SymMap)
     Map = SymMap->UseECMap && isECObject(*Obj) ? &SymMap->ECMap : &SymMap->Map;
+
+  auto *GOFFObj =
+      SymbolAttrs ? dyn_cast<GOFFObjectFile>(Obj) : nullptr;
 
   for (const object::BasicSymbolRef &S : Obj->symbols()) {
     if (!isArchiveSymbol(S))
@@ -823,6 +830,10 @@ static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
         continue; // ignore duplicated symbol
       if (Map == &SymMap->Map) {
         Ret.push_back(SymNames.tell());
+        if (SymbolAttrs)
+          SymbolAttrs->push_back(
+              GOFFObj ? GOFFObj->getZOSSymbolAttributes(S.getRawDataRefImpl())
+                      : 0);
         SymNames << Name << '\0';
         // If EC is enabled, then the import descriptors are NOT put into EC
         // objects so we need to copy them to the EC map manually.
@@ -831,6 +842,10 @@ static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
       }
     } else {
       Ret.push_back(SymNames.tell());
+      if (SymbolAttrs)
+        SymbolAttrs->push_back(
+            GOFFObj ? GOFFObj->getZOSSymbolAttributes(S.getRawDataRefImpl())
+                    : 0);
       if (Error E = S.printName(SymNames))
         return std::move(E);
       SymNames << '\0';
@@ -1073,8 +1088,10 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     }
 
     if (NeedSymbols != SymtabWritingMode::NoSymtab) {
+      std::vector<uint32_t> *AttrsOut =
+          isZOSArchive(Kind) ? &D.SymbolAttrs : nullptr;
       Expected<std::vector<unsigned>> SymbolsOrErr =
-          getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap);
+          getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap, AttrsOut);
       if (!SymbolsOrErr)
         return createFileError(MemberName, SymbolsOrErr.takeError());
       D.Symbols = std::move(*SymbolsOrErr);
@@ -1088,6 +1105,7 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     //   - should not find any references to a blank symbol
     if ((LastZosObjIndex == Index) && (SymNames.tell() == 0)) {
       D.Symbols.push_back(0);
+      D.SymbolAttrs.push_back(0); // blank dummy symbol has no attributes
       SymNames << ' ' << '\0';
     }
 
