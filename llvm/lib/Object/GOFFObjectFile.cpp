@@ -394,22 +394,23 @@ uint32_t GOFFObjectFile::getZOSSymbolAttributes(DataRefImpl Symb) const {
   if (LinkageType == GOFF::ESD_LT_XPLink)
     Attrs |= 0x2;
 
-  // Bit 0 (0x1): Writable Static Area — the symbol is data (Executable on the
-  // symbol record) and its parent ED has non-initial loading behavior (writable
-  // storage).  LoadBehavior is only set on ED records, not on LD/PR/ER, so we
-  // read it from the parent.
-  GOFF::ESDExecutable Executable;
-  ESDRecord::getExecutable(SymRecord, Executable);
-  if (Executable == GOFF::ESD_EXE_DATA) {
-    uint32_t ParentEsdId;
-    ESDRecord::getParentEsdId(SymRecord, ParentEsdId);
-    if (ParentEsdId) {
-      const uint8_t *EdRecord = EsdPtrs[ParentEsdId];
-      GOFF::ESDLoadingBehavior LoadingBehavior;
-      ESDRecord::getLoadingBehavior(EdRecord, LoadingBehavior);
-      if (LoadingBehavior != GOFF::ESD_LB_Initial)
-        Attrs |= 0x1;
-    }
+  // Bit 0 (0x1): Writable Static Area — the symbol's parent ED has NameSpace
+  // ESD_NS_Parts (name space 3: "External data items and linkage descriptors").
+  //
+  // All classes that contribute to the WSA bit use name space 3: C_WSA64
+  // (global writable data, ESD_LB_Deferred) and C_@@QPPA2 (the LE PPA2 anchor
+  // class, ESD_LB_Initial) both have NameSpace=WSA(03) in the ESD dump.
+  // C_CODE64 and C_DATA64 use NameSpace=Norm(01) and correctly get WSA=0.
+  // LoadBehavior is not the right discriminator because C_@@QPPA2 uses
+  // ESD_LB_Initial yet its symbols (.&ppa2) carry WSA=1 in the reference ar.
+  uint32_t ParentEsdId;
+  ESDRecord::getParentEsdId(SymRecord, ParentEsdId);
+  if (ParentEsdId) {
+    const uint8_t *EdRecord = EsdPtrs[ParentEsdId];
+    GOFF::ESDNameSpaceId NameSpace;
+    ESDRecord::getNameSpaceId(EdRecord, NameSpace);
+    if (NameSpace == GOFF::ESD_NS_Parts)
+      Attrs |= 0x1;
   }
 
   return Attrs;
