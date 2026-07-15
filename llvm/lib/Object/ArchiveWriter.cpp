@@ -803,6 +803,23 @@ bool isImportDescriptor(StringRef Name) {
           Name.ends_with(NullThunkDataSuffix));
 }
 
+// Returns true if a symbol from a GOFF object should be included in the z/OS
+// archive symbol table.  The system ar includes all defined, named symbols
+// regardless of binding scope — including SCOPE(SECTION) symbols such as
+// foo#C, foo#S, and .&ppa2 — so we cannot use isArchiveSymbol() which
+// requires SF_Global and therefore rejects SCOPE(SECTION) symbols.
+static bool isZOSArchiveSymbol(const object::BasicSymbolRef &S) {
+  Expected<uint32_t> SymFlagsOrErr = S.getFlags();
+  if (!SymFlagsOrErr)
+    report_fatal_error(SymFlagsOrErr.takeError());
+  // Drop format-specific internal markers and undefined (ER) symbols.
+  if (*SymFlagsOrErr & object::SymbolRef::SF_FormatSpecific)
+    return false;
+  if (*SymFlagsOrErr & object::SymbolRef::SF_Undefined)
+    return false;
+  return true;
+}
+
 static Expected<std::vector<unsigned>>
 getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
            SymMap *SymMap, std::vector<uint32_t> *SymbolAttrs = nullptr) {
@@ -819,7 +836,7 @@ getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
       SymbolAttrs ? dyn_cast<GOFFObjectFile>(Obj) : nullptr;
 
   for (const object::BasicSymbolRef &S : Obj->symbols()) {
-    if (!isArchiveSymbol(S))
+    if (GOFFObj ? !isZOSArchiveSymbol(S) : !isArchiveSymbol(S))
       continue;
     if (Map) {
       std::string Name;
