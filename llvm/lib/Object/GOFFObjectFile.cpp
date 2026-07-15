@@ -376,38 +376,41 @@ GOFFObjectFile::getSymbolSection(DataRefImpl Symb) const {
 }
 
 uint32_t GOFFObjectFile::getZOSSymbolAttributes(DataRefImpl Symb) const {
-  const uint8_t *EsdRecord = getSymbolEsdRecord(Symb);
+  const uint8_t *SymRecord = getSymbolEsdRecord(Symb);
 
-  // Navigate to the parent ED record, which holds AMODE, linkage, and
-  // loading behavior for the section the symbol belongs to.
-  uint32_t ParentEsdId;
-  ESDRecord::getParentEsdId(EsdRecord, ParentEsdId);
-  const uint8_t *EdRecord =
-      ParentEsdId ? EsdPtrs[ParentEsdId] : EsdRecord;
-
+  // AMODE and LinkageType are stored on the symbol's own ESD record (LD, PR,
+  // or ER).  EDAttr does not carry these fields — only LDAttr/PRAttr/ERAttr do.
   uint32_t Attrs = 0;
 
   // Bit 2 (0x4): 64-bit — AMODE is ESD_AMODE_64.
   GOFF::ESDAmode Amode;
-  ESDRecord::getAmode(EdRecord, Amode);
+  ESDRecord::getAmode(SymRecord, Amode);
   if (Amode == GOFF::ESD_AMODE_64)
     Attrs |= 0x4;
 
   // Bit 1 (0x2): XPLink — LinkageType is ESD_LT_XPLink.
   GOFF::ESDLinkageType LinkageType;
-  ESDRecord::getLinkageType(EdRecord, LinkageType);
+  ESDRecord::getLinkageType(SymRecord, LinkageType);
   if (LinkageType == GOFF::ESD_LT_XPLink)
     Attrs |= 0x2;
 
-  // Bit 0 (0x1): Writable Static Area — section is data and not read-only
-  // (LoadingBehavior != ESD_LB_Initial).
+  // Bit 0 (0x1): Writable Static Area — the symbol is data (Executable on the
+  // symbol record) and its parent ED has non-initial loading behavior (writable
+  // storage).  LoadBehavior is only set on ED records, not on LD/PR/ER, so we
+  // read it from the parent.
   GOFF::ESDExecutable Executable;
-  ESDRecord::getExecutable(EdRecord, Executable);
-  GOFF::ESDLoadingBehavior LoadingBehavior;
-  ESDRecord::getLoadingBehavior(EdRecord, LoadingBehavior);
-  if (Executable == GOFF::ESD_EXE_DATA &&
-      LoadingBehavior != GOFF::ESD_LB_Initial)
-    Attrs |= 0x1;
+  ESDRecord::getExecutable(SymRecord, Executable);
+  if (Executable == GOFF::ESD_EXE_DATA) {
+    uint32_t ParentEsdId;
+    ESDRecord::getParentEsdId(SymRecord, ParentEsdId);
+    if (ParentEsdId) {
+      const uint8_t *EdRecord = EsdPtrs[ParentEsdId];
+      GOFF::ESDLoadingBehavior LoadingBehavior;
+      ESDRecord::getLoadingBehavior(EdRecord, LoadingBehavior);
+      if (LoadingBehavior != GOFF::ESD_LB_Initial)
+        Attrs |= 0x1;
+    }
+  }
 
   return Attrs;
 }
