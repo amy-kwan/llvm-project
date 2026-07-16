@@ -672,26 +672,44 @@ static void writeSymbolTable(raw_ostream &Out, object::Archive::Kind Kind,
   else
     printNBits(Out, Kind, NumSyms);
 
-  uint64_t Pos = MembersOffset;
-  for (const MemberData &M : Members) {
-    if (isAIXBigArchive(Kind)) {
-      Pos += M.PreHeadPadSize;
-      if (is64BitSymbolicFile(M.SymFile.get()) != Is64Bit) {
-        Pos += M.Header.size() + M.Data.size() + M.Padding.size();
-        continue;
-      }
-    }
-
-    for (size_t I = 0, E = M.Symbols.size(); I != E; ++I) {
-      if (isBSDLike(Kind))
-        printNBits(Out, Kind, M.Symbols[I]);
-      printNBits(Out, Kind, Pos); // member offset
-      if (isZOSArchive(Kind)) {
+  // For z/OS, __.SYMDEF is positional: the i-th binary entry must correspond
+  // to the i-th null-terminated name in the strtab. The strtab is in
+  // alphabetical order (written by the sorted std::map post-pass), so entries
+  // must also be emitted in alphabetical (strtab-offset) order rather than
+  // member order. Collect all entries, sort by strtab offset, then emit.
+  if (isZOSArchive(Kind)) {
+    using SymEntry = std::tuple<uint32_t, uint64_t, uint32_t>; // strtab_off, member_off, attrs
+    std::vector<SymEntry> Entries;
+    uint64_t Pos = MembersOffset;
+    for (const MemberData &M : Members) {
+      for (size_t I = 0, E = M.Symbols.size(); I != E; ++I) {
         uint32_t Attrs = I < M.SymbolAttrs.size() ? M.SymbolAttrs[I] : 0;
-        printNBits(Out, Kind, Attrs); // symbol archive flags
+        Entries.emplace_back(M.Symbols[I], Pos, Attrs);
       }
+      Pos += M.Header.size() + M.Data.size() + M.Padding.size();
     }
-    Pos += M.Header.size() + M.Data.size() + M.Padding.size();
+    std::sort(Entries.begin(), Entries.end()); // ascending strtab_off
+    for (auto &[StrtabOff, MemberOff, Attrs] : Entries) {
+      printNBits(Out, Kind, MemberOff);
+      printNBits(Out, Kind, Attrs);
+    }
+  } else {
+    uint64_t Pos = MembersOffset;
+    for (const MemberData &M : Members) {
+      if (isAIXBigArchive(Kind)) {
+        Pos += M.PreHeadPadSize;
+        if (is64BitSymbolicFile(M.SymFile.get()) != Is64Bit) {
+          Pos += M.Header.size() + M.Data.size() + M.Padding.size();
+          continue;
+        }
+      }
+      for (size_t I = 0, E = M.Symbols.size(); I != E; ++I) {
+        if (isBSDLike(Kind))
+          printNBits(Out, Kind, M.Symbols[I]);
+        printNBits(Out, Kind, Pos); // member offset
+      }
+      Pos += M.Header.size() + M.Data.size() + M.Padding.size();
+    }
   }
 
   if (isBSDLike(Kind))
