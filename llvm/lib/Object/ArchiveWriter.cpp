@@ -674,11 +674,12 @@ static void writeSymbolTable(raw_ostream &Out, object::Archive::Kind Kind,
 
   // For z/OS, __.SYMDEF is positional: the i-th binary entry must correspond
   // to the i-th null-terminated name in the strtab. The strtab is in
-  // alphabetical order (written by the sorted std::map post-pass), so entries
-  // must also be emitted in alphabetical (strtab-offset) order rather than
-  // member order. Collect all entries, sort by strtab offset, then emit.
+  // alphabetical order, so entries must also be emitted in alphabetical
+  // (strtab-offset) order rather than member order. Collect all entries,
+  // sort by strtab offset, then emit.
   if (isZOSArchive(Kind)) {
-    using SymEntry = std::tuple<uint32_t, uint64_t, uint32_t>; // strtab_off, member_off, attrs
+    // strtab_off, member_off, attrs
+    using SymEntry = std::tuple<uint32_t, uint64_t, uint32_t>;
     std::vector<SymEntry> Entries;
     uint64_t Pos = MembersOffset;
     for (const MemberData &M : Members) {
@@ -1127,33 +1128,20 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     Pos += D.Header.size() + D.Data.size() + D.Padding.size();
   }
 
-  // z/OS post-pass: build the symbol table across all members, without
-  // duplication and alphabetically sort all symbols. This is done to match
-  // the behaviour of z/OS system ar.
+  // On z/OS, build a symbol table that, without duplicates, and that is
+  // alphabetically sorted.
   //
-  // std::map<name, ...> is used as it provides both properties for free:
-  //   - insert_or_assign() overwrites on each encounter, so the last member
-  //     defining a name wins. Symbols like .&ppa2 appear in every GOFF object
-  //     but the archive should contain only one entry, pointing to the last
-  //     member — matching z/OS system ar behaviour.
-  //   - std::map iterates keys in alphabetical order, so when we write names
-  //     into SymNames they are automatically in sorted position.
-  //
-  // The sorted positions matter as Symbols[] stores byte offsets into SymNames.
-  // writeSymbolTable() later reads the offsets to locate each name in the
-  // string table. Consider an archive with foo.o (defines "foo") and
-  // bar.o (defines "bar"):
-  //
-  //   Archive written in member order:   SymNames = "foo\0bar\0"
-  //     offset of "foo" = 0, offset of "bar" = 4
-  //   Archive written in sorted order:   SymNames = "bar\0foo\0"
-  //     offset of "bar" = 0, offset of "foo" = 4
-  // Writing from the sorted map produces the correct offsets directly and
-  // matches z/OS ar.
+  // Using std::map provides both properties:
+  // - try_emplace() keeps only the first definition of each name, so symbols
+  //   like .&ppa2 that appear in every GOFF object exist once in the archive.
+  //   The choice of which member to point to is arbitrary as z/OS system ar
+  //   appears to be non-deterministic about this.
+  // - std::map iterates keys in alphabetical order, so names are written into
+  //   SymNames in sorted order, giving each symbol the correct offset. (Symbols
+  //   stores byte offsets into SymNames; writeSymbolTable() then sorts entries
+  //   by those offsets so that entry i aligns with strtab name i.)
   if (isZOSArchive(Kind) && NeedSymbols != SymtabWritingMode::NoSymtab) {
-    // name -> (memberIndex, attrs). Later definitions overwrite earlier ones
-    // so that the last member defining a symbol wins, matching z/OS system ar.
-    // std::map keeps keys in alphabetical order for sorted SymNames output.
+    // name -> (memberIndex, attrs)
     std::map<std::string, std::pair<uint32_t, uint32_t>> ZOSSyms;
     for (uint32_t I = 0; I < Ret.size(); ++I) {
       auto *GOFFObj = dyn_cast_or_null<GOFFObjectFile>(Ret[I].SymFile.get());
@@ -1168,7 +1156,7 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
           return std::move(E);
         uint32_t Attrs =
             GOFFObj->getZOSSymbolArchiveAttributes(S.getRawDataRefImpl());
-        ZOSSyms.insert_or_assign(Name, std::make_pair(I, Attrs));
+        ZOSSyms.try_emplace(Name, I, Attrs);
       }
     }
 
