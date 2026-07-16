@@ -683,16 +683,14 @@ static void writeSymbolTable(raw_ostream &Out, object::Archive::Kind Kind,
     std::vector<SymEntry> Entries;
     uint64_t Pos = MembersOffset;
     for (const MemberData &M : Members) {
-      for (size_t I = 0, E = M.Symbols.size(); I != E; ++I) {
-        uint32_t Attrs = I < M.SymbolAttrs.size() ? M.SymbolAttrs[I] : 0;
-        Entries.emplace_back(M.Symbols[I], Pos, Attrs);
-      }
+      for (size_t I = 0, E = M.Symbols.size(); I != E; ++I)
+        Entries.emplace_back(M.Symbols[I], Pos, M.SymbolAttrs[I]);
       Pos += M.Header.size() + M.Data.size() + M.Padding.size();
     }
     std::sort(Entries.begin(), Entries.end()); // ascending strtab_off
     for (auto &[StrtabOff, MemberOff, Attrs] : Entries) {
-      printNBits(Out, Kind, MemberOff);
-      printNBits(Out, Kind, Attrs);
+      printNBits(Out, Kind, MemberOff); // member offset
+      printNBits(Out, Kind, Attrs); // symbol archive flags
     }
   } else {
     uint64_t Pos = MembersOffset;
