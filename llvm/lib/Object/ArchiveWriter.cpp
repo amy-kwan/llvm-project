@@ -1113,11 +1113,13 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
   // duplication and alphabetically sort all symbols. This is done to match
   // the behaviour of z/OS system ar.
   //
-  // std::map<name, ...> is used as it provides  both properties for free:
-  //   - try_emplace() keeps only the first definition of each name, so symbols
-  //     like .&ppa2 that every GOFF object emits appear only once.
+  // std::map<name, ...> is used as it provides both properties for free:
+  //   - insert_or_assign() overwrites on each encounter, so the last member
+  //     defining a name wins. Symbols like .&ppa2 appear in every GOFF object
+  //     but the archive should contain only one entry, pointing to the last
+  //     member — matching z/OS system ar behaviour.
   //   - std::map iterates keys in alphabetical order, so when we write names
-  //     into SymNames, they are automatically in sorted position.
+  //     into SymNames they are automatically in sorted position.
   //
   // The sorted positions matter as Symbols[] stores byte offsets into SymNames.
   // writeSymbolTable() later reads the offsets to locate each name in the
@@ -1131,7 +1133,9 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
   // Writing from the sorted map produces the correct offsets directly and
   // matches z/OS ar.
   if (isZOSArchive(Kind) && NeedSymbols != SymtabWritingMode::NoSymtab) {
-    // Insert into a std::map<name, (memberIndex, attrs)>.
+    // name -> (memberIndex, attrs). Later definitions overwrite earlier ones
+    // so that the last member defining a symbol wins, matching z/OS system ar.
+    // std::map keeps keys in alphabetical order for sorted SymNames output.
     std::map<std::string, std::pair<uint32_t, uint32_t>> ZOSSyms;
     for (uint32_t I = 0; I < Ret.size(); ++I) {
       auto *GOFFObj = dyn_cast_or_null<GOFFObjectFile>(Ret[I].SymFile.get());
@@ -1146,7 +1150,7 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
           return std::move(E);
         uint32_t Attrs =
             GOFFObj->getZOSSymbolArchiveAttributes(S.getRawDataRefImpl());
-        ZOSSyms.try_emplace(Name, I, Attrs);
+        ZOSSyms.insert_or_assign(Name, std::make_pair(I, Attrs));
       }
     }
 
