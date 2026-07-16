@@ -821,9 +821,10 @@ static bool isZOSArchiveSymbol(const object::BasicSymbolRef &S) {
   return true;
 }
 
-static Expected<std::vector<unsigned>>
-getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
-           SymMap *SymMap) {
+static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
+                                                  uint16_t Index,
+                                                  raw_ostream &SymNames,
+                                                  SymMap *SymMap) {
   std::vector<unsigned> Ret;
 
   if (Obj == nullptr)
