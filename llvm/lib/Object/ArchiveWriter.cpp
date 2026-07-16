@@ -368,8 +368,8 @@ printMemberHeader(raw_ostream &Out, uint64_t Pos, raw_ostream &StringTable,
 namespace {
 struct MemberData {
   std::vector<unsigned> Symbols;
-  // Parallel to Symbols: z/OS archive attribute bits per symbol.
-  // Entry i corresponds to Symbols[i]. Empty for non-z/OS archives.
+  // z/OS archive attribute bits per symbol. Entry i of SymbolAttrs corresponds
+  // to Symbols[i]. These attributes are empty for non-z/OS archives.
   std::vector<uint32_t> SymbolAttrs;
   std::string Header;
   StringRef Data;
@@ -496,8 +496,8 @@ static void writeSymbolTableHeader(raw_ostream &Out, object::Archive::Kind Kind,
                                 PrevMemberOffset, NextMemberOffset);
   } else if (isZOSArchive(Kind)) {
     const char *Name = "__.SYMDEF";
-    // Use mode 0600 (octal 600) to match the permission bits written by
-    // the z/OS system ar for the __.SYMDEF member.
+    // Use mode 0600 to match the permission that is written by the z/OS system
+    // ar for the __.SYMDEF member.
     printZOSMemberHeader(Out, Name, now(Deterministic), 0, 0, 0600, Size);
   } else {
     const char *Name = is64BitKind(Kind) ? "/SYM64" : "";
@@ -688,7 +688,7 @@ static void writeSymbolTable(raw_ostream &Out, object::Archive::Kind Kind,
       printNBits(Out, Kind, Pos); // member offset
       if (isZOSArchive(Kind)) {
         uint32_t Attrs = I < M.SymbolAttrs.size() ? M.SymbolAttrs[I] : 0;
-        printNBits(Out, Kind, Attrs); // symbol flags
+        printNBits(Out, Kind, Attrs); // symbol archive flags
       }
     }
     Pos += M.Header.size() + M.Data.size() + M.Padding.size();
@@ -804,16 +804,15 @@ bool isImportDescriptor(StringRef Name) {
           Name.ends_with(NullThunkDataSuffix));
 }
 
-// Returns true if a symbol from a GOFF object should be included in the z/OS
-// archive symbol table.  The system ar includes all defined, named symbols
-// regardless of binding scope — including SCOPE(SECTION) symbols such as
-// foo#C, foo#S, and .&ppa2 — so we cannot use isArchiveSymbol() which
-// requires SF_Global and therefore rejects SCOPE(SECTION) symbols.
+// Returns true if a GOFF symbol should be included in the z/OS archive symbol
+// table. Unlike isArchiveSymbol(), this does not require SF_Global, because
+// z/OS ar includes SCOPE(SECTION) symbols (such as #C, #S and .&ppa2), which
+// are local in binding scope but still need to be resolvable by the binder.
+// Only format-specific symbols and undefined (ER) references are excluded.
 static bool isZOSArchiveSymbol(const object::BasicSymbolRef &S) {
   Expected<uint32_t> SymFlagsOrErr = S.getFlags();
   if (!SymFlagsOrErr)
     report_fatal_error(SymFlagsOrErr.takeError());
-  // Drop format-specific internal markers and undefined (ER) symbols.
   if (*SymFlagsOrErr & object::SymbolRef::SF_FormatSpecific)
     return false;
   if (*SymFlagsOrErr & object::SymbolRef::SF_Undefined)
@@ -1096,8 +1095,6 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     }
 
     if (NeedSymbols != SymtabWritingMode::NoSymtab) {
-      // For z/OS archives the symbol collection is deferred to a post-pass
-      // below that deduplicates and sorts across all members at once.
       if (!isZOSArchive(Kind)) {
         Expected<std::vector<unsigned>> SymbolsOrErr =
             getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap);
@@ -1112,11 +1109,29 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     Pos += D.Header.size() + D.Data.size() + D.Padding.size();
   }
 
-  // z/OS: collect all symbols across members into a sorted map keyed by name.
-  // std::map gives deduplication (first member wins) and alphabetical order in
-  // one pass.  A second pass writes SymNames and assigns Symbols/SymbolAttrs.
+  // z/OS post-pass: build the symbol table across all members, without
+  // duplication and alphabetically sort all symbols. This is done to match
+  // the behaviour of z/OS system ar.
+  //
+  // std::map<name, ...> is used as it provides  both properties for free:
+  //   - try_emplace() keeps only the first definition of each name, so symbols
+  //     like .&ppa2 that every GOFF object emits appear only once.
+  //   - std::map iterates keys in alphabetical order, so when we write names
+  //     into SymNames, they are automatically in sorted position.
+  //
+  // The sorted positions matter as Symbols[] stores byte offsets into SymNames.
+  // writeSymbolTable() later reads the offsets to locate each name in the
+  // string table. Consider an archive with foo.o (defines "foo") and
+  // bar.o (defines "bar"):
+  //
+  //   Archive written in member order:   SymNames = "foo\0bar\0"
+  //     offset of "foo" = 0, offset of "bar" = 4
+  //   Archive written in sorted order:   SymNames = "bar\0foo\0"
+  //     offset of "bar" = 0, offset of "foo" = 4
+  // Writing from the sorted map produces the correct offsets directly and
+  // matches z/OS ar.
   if (isZOSArchive(Kind) && NeedSymbols != SymtabWritingMode::NoSymtab) {
-    // name -> (memberIndex, attrs)
+    // Insert into a std::map<name, (memberIndex, attrs)>.
     std::map<std::string, std::pair<uint32_t, uint32_t>> ZOSSyms;
     for (uint32_t I = 0; I < Ret.size(); ++I) {
       auto *GOFFObj = dyn_cast_or_null<GOFFObjectFile>(Ret[I].SymFile.get());
@@ -1129,11 +1144,16 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
         raw_string_ostream NS(Name);
         if (Error E = S.printName(NS))
           return std::move(E);
-        uint32_t Attrs = GOFFObj->getZOSSymbolArchiveAttributes(S.getRawDataRefImpl());
-        ZOSSyms.try_emplace(Name, I, Attrs); // first member wins on collision
+        uint32_t Attrs =
+            GOFFObj->getZOSSymbolArchiveAttributes(S.getRawDataRefImpl());
+        ZOSSyms.try_emplace(Name, I, Attrs);
       }
     }
 
+    // Write each name into SymNames in alphabetical order. SymNames.tell()
+    // before each write gives the corresponding symbol's strtab offset,
+    // which is stored in the MemberData (Ret, below) it belongs to for
+    // writeSymbolTable() to emit.
     for (auto &[Name, MemberAttrs] : ZOSSyms) {
       auto [MemberIdx, Attrs] = MemberAttrs;
       uint32_t Off = SymNames.tell();
@@ -1142,15 +1162,17 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
       Ret[MemberIdx].SymbolAttrs.push_back(Attrs);
     }
 
-    // On z/OS, when there are no symbols, add a dummy blank symbol so the
-    // z/OS binder (which requires at least one symbol) does not error out.
+    // On z/OS, when there are no symbols, add a dummy blank symbol
+    // into the symbol table. This is done since the z/OS binder:
+    //   - emits an error if there is no symbol table in the archive
+    //   - emits an error if the symbol table has 0 symbols
+    //   - should not find any references to a blank symbol
     if (SymNames.tell() == 0 && LastZosObjIndex != UINT_MAX) {
       Ret[LastZosObjIndex].Symbols.push_back(0);
       Ret[LastZosObjIndex].SymbolAttrs.push_back(0);
       SymNames << ' ' << '\0';
     }
   }
-
   // If there are no symbols, emit an empty symbol table, to satisfy Solaris
   // tools, older versions of which expect a symbol table in a non-empty
   // archive, regardless of whether there are any symbols in it.
