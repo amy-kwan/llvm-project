@@ -496,7 +496,9 @@ static void writeSymbolTableHeader(raw_ostream &Out, object::Archive::Kind Kind,
                                 PrevMemberOffset, NextMemberOffset);
   } else if (isZOSArchive(Kind)) {
     const char *Name = "__.SYMDEF";
-    printZOSMemberHeader(Out, Name, now(Deterministic), 0, 0, 0, Size);
+    // Use mode 0600 (octal 600) to match the permission bits written by
+    // the z/OS system ar for the __.SYMDEF member.
+    printZOSMemberHeader(Out, Name, now(Deterministic), 0, 0, 0600, Size);
   } else {
     const char *Name = is64BitKind(Kind) ? "/SYM64" : "";
     printGNUSmallMemberHeader(Out, Name, now(Deterministic), 0, 0, 0, Size);
@@ -685,8 +687,7 @@ static void writeSymbolTable(raw_ostream &Out, object::Archive::Kind Kind,
         printNBits(Out, Kind, M.Symbols[I]);
       printNBits(Out, Kind, Pos); // member offset
       if (isZOSArchive(Kind)) {
-        uint32_t Attrs =
-            I < M.SymbolAttrs.size() ? M.SymbolAttrs[I] : 0;
+        uint32_t Attrs = I < M.SymbolAttrs.size() ? M.SymbolAttrs[I] : 0;
         printNBits(Out, Kind, Attrs); // symbol flags
       }
     }
@@ -822,7 +823,7 @@ static bool isZOSArchiveSymbol(const object::BasicSymbolRef &S) {
 
 static Expected<std::vector<unsigned>>
 getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
-           SymMap *SymMap, std::vector<uint32_t> *SymbolAttrs = nullptr) {
+           SymMap *SymMap) {
   std::vector<unsigned> Ret;
 
   if (Obj == nullptr)
@@ -832,11 +833,8 @@ getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
   if (SymMap)
     Map = SymMap->UseECMap && isECObject(*Obj) ? &SymMap->ECMap : &SymMap->Map;
 
-  auto *GOFFObj =
-      SymbolAttrs ? dyn_cast<GOFFObjectFile>(Obj) : nullptr;
-
   for (const object::BasicSymbolRef &S : Obj->symbols()) {
-    if (GOFFObj ? !isZOSArchiveSymbol(S) : !isArchiveSymbol(S))
+    if (!isArchiveSymbol(S))
       continue;
     if (Map) {
       std::string Name;
@@ -847,10 +845,6 @@ getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
         continue; // ignore duplicated symbol
       if (Map == &SymMap->Map) {
         Ret.push_back(SymNames.tell());
-        if (SymbolAttrs)
-          SymbolAttrs->push_back(
-              GOFFObj ? GOFFObj->getZOSSymbolAttributes(S.getRawDataRefImpl())
-                      : 0);
         SymNames << Name << '\0';
         // If EC is enabled, then the import descriptors are NOT put into EC
         // objects so we need to copy them to the EC map manually.
@@ -859,10 +853,6 @@ getSymbols(SymbolicFile *Obj, uint16_t Index, raw_ostream &SymNames,
       }
     } else {
       Ret.push_back(SymNames.tell());
-      if (SymbolAttrs)
-        SymbolAttrs->push_back(
-            GOFFObj ? GOFFObj->getZOSSymbolAttributes(S.getRawDataRefImpl())
-                    : 0);
       if (Error E = S.printName(SymNames))
         return std::move(E);
       SymNames << '\0';
@@ -1105,29 +1095,61 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     }
 
     if (NeedSymbols != SymtabWritingMode::NoSymtab) {
-      std::vector<uint32_t> *AttrsOut =
-          isZOSArchive(Kind) ? &D.SymbolAttrs : nullptr;
-      Expected<std::vector<unsigned>> SymbolsOrErr =
-          getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap, AttrsOut);
-      if (!SymbolsOrErr)
-        return createFileError(MemberName, SymbolsOrErr.takeError());
-      D.Symbols = std::move(*SymbolsOrErr);
+      // For z/OS archives the symbol collection is deferred to a post-pass
+      // below that deduplicates and sorts across all members at once.
+      if (!isZOSArchive(Kind)) {
+        Expected<std::vector<unsigned>> SymbolsOrErr =
+            getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap);
+        if (!SymbolsOrErr)
+          return createFileError(MemberName, SymbolsOrErr.takeError());
+        D.Symbols = std::move(*SymbolsOrErr);
+      }
       if (D.SymFile)
         HasObject = true;
-    }
-    // On z/OS, when there are no symbols, add a dummy blank symbol
-    // into the symbol table. This is done since the z/OS binder:
-    //   - emits an error if there is no symbol table in the archive
-    //   - emits an error if the symbol table has 0 symbols
-    //   - should not find any references to a blank symbol
-    if ((LastZosObjIndex == Index) && (SymNames.tell() == 0)) {
-      D.Symbols.push_back(0);
-      D.SymbolAttrs.push_back(0); // blank dummy symbol has no attributes
-      SymNames << ' ' << '\0';
     }
 
     Pos += D.Header.size() + D.Data.size() + D.Padding.size();
   }
+
+  // z/OS: collect all symbols across members into a sorted map keyed by name.
+  // std::map gives deduplication (first member wins) and alphabetical order in
+  // one pass.  A second pass writes SymNames and assigns Symbols/SymbolAttrs.
+  if (isZOSArchive(Kind) && NeedSymbols != SymtabWritingMode::NoSymtab) {
+    // name -> (memberIndex, attrs)
+    std::map<std::string, std::pair<uint32_t, uint32_t>> ZOSSyms;
+    for (uint32_t I = 0; I < Ret.size(); ++I) {
+      auto *GOFFObj = dyn_cast_or_null<GOFFObjectFile>(Ret[I].SymFile.get());
+      if (!GOFFObj)
+        continue;
+      for (const object::BasicSymbolRef &S : GOFFObj->symbols()) {
+        if (!isZOSArchiveSymbol(S))
+          continue;
+        std::string Name;
+        raw_string_ostream NS(Name);
+        if (Error E = S.printName(NS))
+          return std::move(E);
+        uint32_t Attrs = GOFFObj->getZOSSymbolAttributes(S.getRawDataRefImpl());
+        ZOSSyms.try_emplace(Name, I, Attrs); // first member wins on collision
+      }
+    }
+
+    for (auto &[Name, MemberAttrs] : ZOSSyms) {
+      auto [MemberIdx, Attrs] = MemberAttrs;
+      uint32_t Off = SymNames.tell();
+      SymNames << Name << '\0';
+      Ret[MemberIdx].Symbols.push_back(Off);
+      Ret[MemberIdx].SymbolAttrs.push_back(Attrs);
+    }
+
+    // On z/OS, when there are no symbols, add a dummy blank symbol so the
+    // z/OS binder (which requires at least one symbol) does not error out.
+    if (SymNames.tell() == 0 && LastZosObjIndex != UINT_MAX) {
+      Ret[LastZosObjIndex].Symbols.push_back(0);
+      Ret[LastZosObjIndex].SymbolAttrs.push_back(0);
+      SymNames << ' ' << '\0';
+    }
+  }
+
   // If there are no symbols, emit an empty symbol table, to satisfy Solaris
   // tools, older versions of which expect a symbol table in a non-empty
   // archive, regardless of whether there are any symbols in it.
