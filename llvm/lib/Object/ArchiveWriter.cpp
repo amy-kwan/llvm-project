@@ -1129,7 +1129,7 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
         raw_string_ostream NS(Name);
         if (Error E = S.printName(NS))
           return std::move(E);
-        uint32_t Attrs = GOFFObj->getZOSSymbolAttributes(S.getRawDataRefImpl());
+        uint32_t Attrs = GOFFObj->getZOSSymbolArchiveAttributes(S.getRawDataRefImpl());
         ZOSSyms.try_emplace(Name, I, Attrs); // first member wins on collision
       }
     }

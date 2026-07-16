@@ -375,7 +375,7 @@ GOFFObjectFile::getSymbolSection(DataRefImpl Symb) const {
                                std::to_string(SymEdId));
 }
 
-uint32_t GOFFObjectFile::getZOSSymbolAttributes(DataRefImpl Symb) const {
+uint32_t GOFFObjectFile::getZOSSymbolArchiveAttributes(DataRefImpl Symb) const {
   const uint8_t *SymRecord = getSymbolEsdRecord(Symb);
 
   // AMODE and LinkageType are stored on the symbol's own ESD record (LD, PR,

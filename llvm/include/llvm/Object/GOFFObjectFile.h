@@ -51,7 +51,7 @@ public:
   //   bit 2 (0x4): symbol is 64-bit (AMODE == ESD_AMODE_64)
   //   bit 1 (0x2): symbol uses XPLink calling convention
   //   bit 0 (0x1): symbol resides in a writable static area (data, not r/o)
-  uint32_t getZOSSymbolAttributes(DataRefImpl Symb) const;
+  uint32_t getZOSSymbolArchiveAttributes(DataRefImpl Symb) const;
 
   GOFFObjectFile(MemoryBufferRef Object, Error &Err);
   static inline bool classof(const Binary *V) { return V->isGOFF(); }
