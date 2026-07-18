@@ -822,19 +822,27 @@ bool isImportDescriptor(StringRef Name) {
 }
 
 // Returns true if a GOFF symbol should be included in the z/OS archive symbol
-// table. Unlike isArchiveSymbol(), this does not require SF_Global, because
-// z/OS ar includes SCOPE(SECTION) symbols (such as #C, #S and .&ppa2), which
-// are local in binding scope but still need to be resolvable by the binder.
-// Only format-specific symbols and undefined (ER) references are excluded.
+// table. Inclusion is based directly on the ESD record type:
+//   LabelDefinition (LD)  - always include: covers foo#C, .&ppa2, etc.
+//   PartReference   (PR)  - include only if length > 0 (zero-length = unresolved)
+//   ExternalReference(ER) - always exclude: these are undefined references
+// SD and ED records are never reached here because the symbol iterator skips
+// them in moveSymbolNext().
 static bool isZOSArchiveSymbol(const object::BasicSymbolRef &S) {
-  Expected<uint32_t> SymFlagsOrErr = S.getFlags();
-  if (!SymFlagsOrErr)
-    report_fatal_error(SymFlagsOrErr.takeError());
-  if (*SymFlagsOrErr & object::SymbolRef::SF_FormatSpecific)
+  GOFFSymbolRef GS(cast<object::SymbolRef>(S));
+  GOFF::ESDSymbolType Type =
+      GS.getObject()->getESDSymbolType(S.getRawDataRefImpl());
+  switch (Type) {
+  case GOFF::ESD_ST_LabelDefinition:
+    return true;
+  case GOFF::ESD_ST_PartReference:
+    return GS.getSize() > 0;
+  case GOFF::ESD_ST_ExternalReference:
     return false;
-  if (*SymFlagsOrErr & object::SymbolRef::SF_Undefined)
-    return false;
-  return true;
+  default:
+    // SD and ED are skipped by the iterator; anything else is unexpected.
+    llvm_unreachable("unexpected ESD symbol type in z/OS archive symbol check");
+  }
 }
 
 static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
