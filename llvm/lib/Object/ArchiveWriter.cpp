@@ -829,7 +829,7 @@ bool isImportDescriptor(StringRef Name) {
 // SD and ED records are never reached here because the symbol iterator skips
 // them in moveSymbolNext().
 static bool isZOSArchiveSymbol(const object::BasicSymbolRef &S) {
-  GOFFSymbolRef GS(cast<object::SymbolRef>(S));
+  GOFFSymbolRef GS(static_cast<const object::SymbolRef &>(S));
   GOFF::ESDSymbolType Type =
       GS.getObject()->getESDSymbolType(S.getRawDataRefImpl());
   switch (Type) {
