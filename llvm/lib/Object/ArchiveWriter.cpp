@@ -1094,6 +1094,17 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
       }
       if (D.SymFile)
         HasObject = true;
+      // On z/OS, when there are no symbols, add a dummy blank symbol into the
+      // symbol table attached to the last object member. This satisfies the
+      // z/OS binder, which errors if the archive has no symbol table or if the
+      // symbol table has zero entries. A single-space name is used because the
+      // binder will never search for it.
+      if (isZOSArchive(Kind) && (LastZosObjIndex == Index) &&
+          (SymNames.tell() == 0)) {
+        D.Symbols.push_back(0);
+        D.SymbolAttrs.push_back(0);
+        SymNames << ' ' << '\0';
+      }
     }
 
     Pos += D.Header.size() + D.Data.size() + D.Padding.size();

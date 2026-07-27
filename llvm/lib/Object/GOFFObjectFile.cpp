@@ -241,13 +241,6 @@ uint64_t GOFFObjectFile::getCommonSymbolSizeImpl(DataRefImpl Symb) const {
   return 0;
 }
 
-GOFF::ESDSymbolType GOFFObjectFile::getESDSymbolType(DataRefImpl Symb) const {
-  const uint8_t *Record = getSymbolEsdRecord(Symb);
-  GOFF::ESDSymbolType SymbolType;
-  ESDRecord::getSymbolType(Record, SymbolType);
-  return SymbolType;
-}
-
 bool GOFFObjectFile::isSymbolUnresolved(DataRefImpl Symb) const {
   const uint8_t *Record = getSymbolEsdRecord(Symb);
   GOFF::ESDSymbolType SymbolType;

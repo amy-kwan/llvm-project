@@ -47,9 +47,6 @@ class LLVM_ABI GOFFObjectFile : public ObjectFile {
 public:
   Expected<StringRef> getSymbolName(SymbolRef Symbol) const;
 
-  // Returns the raw ESD symbol type for a symbol (LD, PR, ER, etc.).
-  GOFF::ESDSymbolType getESDSymbolType(DataRefImpl Symb) const;
-
   // Returns the z/OS archive symbol attribute bits for a symbol:
   //   bit 2 (0x4): symbol is 64-bit
   //   bit 1 (0x2): symbol uses the XPLink calling convention
