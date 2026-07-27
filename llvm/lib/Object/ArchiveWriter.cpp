@@ -496,9 +496,7 @@ static void writeSymbolTableHeader(raw_ostream &Out, object::Archive::Kind Kind,
                                 PrevMemberOffset, NextMemberOffset);
   } else if (isZOSArchive(Kind)) {
     const char *Name = "__.SYMDEF";
-    // Use mode 0600 to match the permission that is written by the z/OS system
-    // ar for the __.SYMDEF member.
-    printZOSMemberHeader(Out, Name, now(Deterministic), 0, 0, 0600, Size);
+    printZOSMemberHeader(Out, Name, now(Deterministic), 0, 0, 0, Size);
   } else {
     const char *Name = is64BitKind(Kind) ? "/SYM64" : "";
     printGNUSmallMemberHeader(Out, Name, now(Deterministic), 0, 0, 0, Size);
@@ -672,43 +670,23 @@ static void writeSymbolTable(raw_ostream &Out, object::Archive::Kind Kind,
   else
     printNBits(Out, Kind, NumSyms);
 
-  // For z/OS, __.SYMDEF is positional: the i-th binary entry must correspond
-  // to the i-th null-terminated name in the strtab. The strtab is in
-  // alphabetical order, so entries must also be emitted in alphabetical
-  // (strtab-offset) order rather than member order. Collect all entries,
-  // sort by strtab offset, then emit.
-  if (isZOSArchive(Kind)) {
-    // strtab_off, member_off, attrs
-    using SymEntry = std::tuple<uint32_t, uint64_t, uint32_t>;
-    std::vector<SymEntry> Entries;
-    uint64_t Pos = MembersOffset;
-    for (const MemberData &M : Members) {
-      for (size_t I = 0, E = M.Symbols.size(); I != E; ++I)
-        Entries.emplace_back(M.Symbols[I], Pos, M.SymbolAttrs[I]);
-      Pos += M.Header.size() + M.Data.size() + M.Padding.size();
-    }
-    std::sort(Entries.begin(), Entries.end()); // ascending strtab_off
-    for (auto &[StrtabOff, MemberOff, Attrs] : Entries) {
-      printNBits(Out, Kind, MemberOff); // member offset
-      printNBits(Out, Kind, Attrs); // symbol archive flags
-    }
-  } else {
-    uint64_t Pos = MembersOffset;
-    for (const MemberData &M : Members) {
-      if (isAIXBigArchive(Kind)) {
-        Pos += M.PreHeadPadSize;
-        if (is64BitSymbolicFile(M.SymFile.get()) != Is64Bit) {
-          Pos += M.Header.size() + M.Data.size() + M.Padding.size();
-          continue;
-        }
+  uint64_t Pos = MembersOffset;
+  for (const MemberData &M : Members) {
+    if (isAIXBigArchive(Kind)) {
+      Pos += M.PreHeadPadSize;
+      if (is64BitSymbolicFile(M.SymFile.get()) != Is64Bit) {
+        Pos += M.Header.size() + M.Data.size() + M.Padding.size();
+        continue;
       }
-      for (size_t I = 0, E = M.Symbols.size(); I != E; ++I) {
-        if (isBSDLike(Kind))
-          printNBits(Out, Kind, M.Symbols[I]);
-        printNBits(Out, Kind, Pos); // member offset
-      }
-      Pos += M.Header.size() + M.Data.size() + M.Padding.size();
     }
+    for (size_t I = 0, E = M.Symbols.size(); I != E; ++I) {
+      if (isBSDLike(Kind))
+        printNBits(Out, Kind, M.Symbols[I]);
+      printNBits(Out, Kind, Pos); // member offset
+      if (isZOSArchive(Kind))
+        printNBits(Out, Kind, M.SymbolAttrs[I]); // symbol attribute flags
+    }
+    Pos += M.Header.size() + M.Data.size() + M.Padding.size();
   }
 
   if (isBSDLike(Kind))
@@ -819,30 +797,6 @@ bool isImportDescriptor(StringRef Name) {
          Name == StringRef{NullImportDescriptorSymbolName} ||
          (Name.starts_with(NullThunkDataPrefix) &&
           Name.ends_with(NullThunkDataSuffix));
-}
-
-// Returns true if a GOFF symbol should be included in the z/OS archive symbol
-// table. Inclusion is based directly on the ESD record type:
-//   LabelDefinition (LD)  - always include: covers foo#C, .&ppa2, etc.
-//   PartReference   (PR)  - include only if length > 0 (zero-length = unresolved)
-//   ExternalReference(ER) - always exclude: these are undefined references
-// SD and ED records are never reached here because the symbol iterator skips
-// them in moveSymbolNext().
-static bool isZOSArchiveSymbol(const object::BasicSymbolRef &S) {
-  GOFFSymbolRef GS(static_cast<const object::SymbolRef &>(S));
-  GOFF::ESDSymbolType Type =
-      GS.getObject()->getESDSymbolType(S.getRawDataRefImpl());
-  switch (Type) {
-  case GOFF::ESD_ST_LabelDefinition:
-    return true;
-  case GOFF::ESD_ST_PartReference:
-    return GS.getSize() > 0;
-  case GOFF::ESD_ST_ExternalReference:
-    return false;
-  default:
-    // SD and ED are skipped by the iterator; anything else is unexpected.
-    llvm_unreachable("unexpected ESD symbol type in z/OS archive symbol check");
-  }
 }
 
 static Expected<std::vector<unsigned>> getSymbols(SymbolicFile *Obj,
@@ -1120,12 +1074,23 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     }
 
     if (NeedSymbols != SymtabWritingMode::NoSymtab) {
-      if (!isZOSArchive(Kind)) {
-        Expected<std::vector<unsigned>> SymbolsOrErr =
-            getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap);
-        if (!SymbolsOrErr)
-          return createFileError(MemberName, SymbolsOrErr.takeError());
-        D.Symbols = std::move(*SymbolsOrErr);
+      Expected<std::vector<unsigned>> SymbolsOrErr =
+          getSymbols(D.SymFile.get(), Index + 1, SymNames, SymMap);
+      if (!SymbolsOrErr)
+        return createFileError(MemberName, SymbolsOrErr.takeError());
+      D.Symbols = std::move(*SymbolsOrErr);
+      // For z/OS, populate SymbolAttrs in lockstep with Symbols so that
+      // writeSymbolTable() can emit the per-symbol attribute word.
+      if (isZOSArchive(Kind)) {
+        auto *GOFFObj = dyn_cast_or_null<GOFFObjectFile>(D.SymFile.get());
+        if (GOFFObj) {
+          for (const object::BasicSymbolRef &S : GOFFObj->symbols()) {
+            if (!isArchiveSymbol(S))
+              continue;
+            D.SymbolAttrs.push_back(
+                GOFFObj->getZOSSymbolArchiveAttributes(S.getRawDataRefImpl()));
+          }
+        }
       }
       if (D.SymFile)
         HasObject = true;
@@ -1134,61 +1099,6 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
     Pos += D.Header.size() + D.Data.size() + D.Padding.size();
   }
 
-  // On z/OS, build a symbol table that, without duplicates, and that is
-  // alphabetically sorted.
-  //
-  // Using std::map provides both properties:
-  // - try_emplace() keeps only the first definition of each name, so symbols
-  //   like .&ppa2 that appear in every GOFF object exist once in the archive.
-  //   The choice of which member to point to is arbitrary as z/OS system ar
-  //   appears to be non-deterministic about this.
-  // - std::map iterates keys in alphabetical order, so names are written into
-  //   SymNames in sorted order, giving each symbol the correct offset. (Symbols
-  //   stores byte offsets into SymNames; writeSymbolTable() then sorts entries
-  //   by those offsets so that entry i aligns with strtab name i.)
-  if (isZOSArchive(Kind) && NeedSymbols != SymtabWritingMode::NoSymtab) {
-    // name -> (memberIndex, attrs)
-    std::map<std::string, std::pair<uint32_t, uint32_t>> ZOSSyms;
-    for (uint32_t I = 0; I < Ret.size(); ++I) {
-      auto *GOFFObj = dyn_cast_or_null<GOFFObjectFile>(Ret[I].SymFile.get());
-      if (!GOFFObj)
-        continue;
-      for (const object::BasicSymbolRef &S : GOFFObj->symbols()) {
-        if (!isZOSArchiveSymbol(S))
-          continue;
-        std::string Name;
-        raw_string_ostream NS(Name);
-        if (Error E = S.printName(NS))
-          return std::move(E);
-        uint32_t Attrs =
-            GOFFObj->getZOSSymbolArchiveAttributes(S.getRawDataRefImpl());
-        ZOSSyms.try_emplace(Name, I, Attrs);
-      }
-    }
-
-    // Write each name into SymNames in alphabetical order. SymNames.tell()
-    // before each write gives the corresponding symbol's strtab offset,
-    // which is stored in the MemberData (Ret, below) it belongs to for
-    // writeSymbolTable() to emit.
-    for (auto &[Name, MemberAttrs] : ZOSSyms) {
-      auto [MemberIdx, Attrs] = MemberAttrs;
-      uint32_t Off = SymNames.tell();
-      SymNames << Name << '\0';
-      Ret[MemberIdx].Symbols.push_back(Off);
-      Ret[MemberIdx].SymbolAttrs.push_back(Attrs);
-    }
-
-    // On z/OS, when there are no symbols, add a dummy blank symbol
-    // into the symbol table. This is done since the z/OS binder:
-    //   - emits an error if there is no symbol table in the archive
-    //   - emits an error if the symbol table has 0 symbols
-    //   - should not find any references to a blank symbol
-    if (SymNames.tell() == 0 && LastZosObjIndex != UINT_MAX) {
-      Ret[LastZosObjIndex].Symbols.push_back(0);
-      Ret[LastZosObjIndex].SymbolAttrs.push_back(0);
-      SymNames << ' ' << '\0';
-    }
-  }
   // If there are no symbols, emit an empty symbol table, to satisfy Solaris
   // tools, older versions of which expect a symbol table in a non-empty
   // archive, regardless of whether there are any symbols in it.
