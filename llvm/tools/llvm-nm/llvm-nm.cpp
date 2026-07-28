@@ -2122,9 +2122,11 @@ static void printZOSArchiveMap(iterator_range<Archive::symbol_iterator> &Map,
       break;
     }
     uint32_t Attrs = I.getZOSAttributes();
+    std::string AttrsStr;
+    llvm::raw_string_ostream(AttrsStr) << format("0x%08x", Attrs);
     outs() << left_justify(I.getName(), NameW) << " "
            << left_justify(FileNameOrErr.get(), MemberW) << " "
-           << left_justify(format("0x%08x", Attrs).str(), AttrsW) << " "
+           << left_justify(AttrsStr, AttrsW) << " "
            << decodeZOSAttributes(Attrs) << "\n";
   }
   outs() << "\n";
