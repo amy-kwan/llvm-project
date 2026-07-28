@@ -41,7 +41,6 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/ConvertEBCDIC.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/LLVMDriver.h"
@@ -2069,21 +2068,18 @@ static void printArchiveMap(iterator_range<Archive::symbol_iterator> &map,
 /// Print the z/OS-specific archive map with symbol attributes.
 ///
 /// Columns:
-///   Name       — symbol name (ASCII, decoded from EBCDIC)
-///   Member     — archive member filename
-///   Attributes — 3-bit attribute word (0x1=WSA, 0x2=XPLink, 0x4=64-bit)
-///   EBCDIC     — raw EBCDIC encoding of the symbol name as hex bytes
+///   Name       - symbol name
+///   Member     - archive member filename
+///   Attributes - 3-bit attribute word (bit 2=64-bit, bit 1=XPLink, bit 0=WSA)
 static void printZOSArchiveMap(iterator_range<Archive::symbol_iterator> &Map,
                                StringRef Filename) {
-  // Column widths (minimum); content is space-padded to at least this width.
   constexpr unsigned NameW   = 20;
   constexpr unsigned MemberW = 22;
 
-  // Header.
   outs() << left_justify("Name", NameW) << " "
          << left_justify("Member", MemberW) << " "
-         << "Attributes" << "  " << "EBCDIC\n";
-  outs() << std::string(NameW + 1 + MemberW + 1 + 10 + 2 + 20, '-') << "\n";
+         << "Attributes\n";
+  outs() << std::string(NameW + 1 + MemberW + 1 + 10, '-') << "\n";
 
   for (auto I : Map) {
     Expected<Archive::Child> C = I.getMember();
@@ -2096,25 +2092,9 @@ static void printZOSArchiveMap(iterator_range<Archive::symbol_iterator> &Map,
       error(FileNameOrErr.takeError(), Filename);
       break;
     }
-
-    StringRef SymName = I.getName();
-    StringRef MemberName = FileNameOrErr.get();
-    uint32_t Attrs = I.getZOSAttributes();
-
-    // Encode the (ASCII) symbol name back to EBCDIC to show raw bytes.
-    SmallString<64> EbcdicName;
-    if (ConverterEBCDIC::convertToEBCDIC(SymName, EbcdicName)) {
-      // On conversion failure just leave the EBCDIC column empty.
-      EbcdicName.clear();
-    }
-    std::string EbcdicHex;
-    raw_string_ostream HexOS(EbcdicHex);
-    for (unsigned char B : EbcdicName)
-      HexOS << format("%02x", B);
-
-    outs() << left_justify(SymName, NameW) << " "
-           << left_justify(MemberName, MemberW) << " "
-           << format("0x%08x", Attrs) << "  " << EbcdicHex << "\n";
+    outs() << left_justify(I.getName(), NameW) << " "
+           << left_justify(FileNameOrErr.get(), MemberW) << " "
+           << format("0x%08x", I.getZOSAttributes()) << "\n";
   }
   outs() << "\n";
 }
