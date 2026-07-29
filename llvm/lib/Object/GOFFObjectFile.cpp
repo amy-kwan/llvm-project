@@ -375,6 +375,38 @@ GOFFObjectFile::getSymbolSection(DataRefImpl Symb) const {
                                std::to_string(SymEdId));
 }
 
+uint32_t GOFFObjectFile::getZOSSymbolArchiveAttributes(DataRefImpl Symb) const {
+  const uint8_t *SymRecord = getSymbolEsdRecord(Symb);
+  uint32_t Attrs = 0;
+
+  // Bit 2 (0x4): 64-bit — AMODE is ESD_AMODE_64. This information is stored
+  // in the symbol's own ESD record (for LD, PR, or ER).
+  GOFF::ESDAmode Amode;
+  ESDRecord::getAmode(SymRecord, Amode);
+  if (Amode == GOFF::ESD_AMODE_64)
+    Attrs |= 0x4;
+
+  // Bit 1 (0x2): XPLink — LinkageType is ESD_LT_XPLink.
+  GOFF::ESDLinkageType LinkageType;
+  ESDRecord::getLinkageType(SymRecord, LinkageType);
+  if (LinkageType == GOFF::ESD_LT_XPLink)
+    Attrs |= 0x2;
+
+  // Bit 0 (0x1): Writable Static Area — the symbol's parent ED has NameSpace
+  // ESD_NS_Parts.
+  uint32_t ParentEsdId;
+  ESDRecord::getParentEsdId(SymRecord, ParentEsdId);
+  if (ParentEsdId) {
+    const uint8_t *EdRecord = EsdPtrs[ParentEsdId];
+    GOFF::ESDNameSpaceId NameSpace;
+    ESDRecord::getNameSpaceId(EdRecord, NameSpace);
+    if (NameSpace == GOFF::ESD_NS_Parts)
+      Attrs |= 0x1;
+  }
+
+  return Attrs;
+}
+
 uint64_t GOFFObjectFile::getSymbolSize(DataRefImpl Symb) const {
   const uint8_t *Record = getSymbolEsdRecord(Symb);
   uint32_t Length;
