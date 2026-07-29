@@ -12,7 +12,7 @@
 
 # RUN: %python %S/../../Object/Inputs/generate_zos_archive.py \
 # RUN:   --output %t.dir/test.a          \
-# RUN:   --member "test.o"               \
+# RUN:   --member "test.o:hex:abcdabcd"  \
 # RUN:   --symtab "sym000:0:0"           \
 # RUN:   --symtab "sym001:0:1"           \
 # RUN:   --symtab "sym010:0:2"           \
