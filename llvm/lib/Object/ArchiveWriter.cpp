@@ -1090,6 +1090,11 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
             D.SymbolAttrs.push_back(
                 GOFFObj->getZOSSymbolArchiveAttributes(S.getRawDataRefImpl()));
           }
+        } else {
+          // For non-GOFF symbolic files (e.g. bitcode/IR), there is no z/OS
+          // archive attribute data available. Pad SymbolAttrs to stay in sync
+          // with Symbols.
+          D.SymbolAttrs.resize(D.Symbols.size(), 0);
         }
       }
       if (D.SymFile)
