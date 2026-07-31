@@ -12,11 +12,11 @@
 # RUN: rm -rf %t.dir && mkdir -p %t.dir
 
 ## Generate GOFF objects for each attribute combination.
-# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/none.o    --name sym_none
-# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/wsa.o     --name sym_wsa    --wsa
-# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/xplink.o  --name sym_xplink --xplink
-# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/bit64.o   --name sym_64bit  --amode64
-# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/all.o     --name sym_all    --amode64 --xplink --wsa
+# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/none.o   --name s_none
+# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/wsa.o    --name s_wsa    --wsa
+# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/xplink.o --name s_xplink --xplink
+# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/bit64.o  --name s_64bit  --amode64
+# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/all.o    --name s_all    --amode64 --xplink --wsa
 
 ## Build a single z/OS archive containing all five objects.
 # RUN: llvm-ar rcD --format=zos %t.dir/test.a \
@@ -26,11 +26,11 @@
 # RUN: llvm-nm --print-armap %t.dir/test.a | FileCheck %s --check-prefix=ARMAP
 
 # ARMAP:      Archive map
-# ARMAP-NEXT: sym_none   in none.o   (flags: 0x00000000 [none])
-# ARMAP-NEXT: sym_wsa    in wsa.o    (flags: 0x00000001 [WSA])
-# ARMAP-NEXT: sym_xplink in xplink.o (flags: 0x00000002 [XPLink])
-# ARMAP-NEXT: sym_64bit  in bit64.o  (flags: 0x00000004 [64-bit])
-# ARMAP-NEXT: sym_all    in all.o    (flags: 0x00000007 [64-bit + XPLink + WSA])
+# ARMAP-NEXT: s_none   in none.o   (flags: 0x00000000 [none])
+# ARMAP-NEXT: s_wsa    in wsa.o    (flags: 0x00000001 [WSA])
+# ARMAP-NEXT: s_xplink in xplink.o (flags: 0x00000002 [XPLink])
+# ARMAP-NEXT: s_64bit  in bit64.o  (flags: 0x00000004 [64-bit])
+# ARMAP-NEXT: s_all    in all.o    (flags: 0x00000007 [64-bit + XPLink + WSA])
 
 ## 2. Verify the raw attribute words written into the archive symbol table.
 ##    The z/OS symtab body layout is:
@@ -63,14 +63,14 @@
 ## 4. Test mixed archive: one GOFF object and one bitcode object together.
 ##    The bitcode member should produce attrs=0 (no GOFF ESD data available).
 # RUN: split-file %s %t.dir
-# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/xplink2.o --name sym_xplink2 --xplink
+# RUN: %python %S/Inputs/generate_goff_object.py --output %t.dir/xplink2.o --name s_xplnk2 --xplink
 # RUN: llvm-as %t.dir/mixed.ll -o %t.dir/mixed.bc
 # RUN: llvm-ar rcD --format=zos %t.dir/mixed.a %t.dir/xplink2.o %t.dir/mixed.bc
 # RUN: llvm-nm --print-armap %t.dir/mixed.a | FileCheck %s --check-prefix=MIXED
 
 # MIXED:      Archive map
-# MIXED-NEXT: sym_xplink2 in xplink2.o (flags: 0x00000002 [XPLink])
-# MIXED-NEXT: mixed_sym   in mixed.bc  (flags: 0x00000000 [none])
+# MIXED-NEXT: s_xplnk2 in xplink2.o (flags: 0x00000002 [XPLink])
+# MIXED-NEXT: mixed_sym in mixed.bc  (flags: 0x00000000 [none])
 
 #--- mixed.ll
 define i32 @mixed_sym() {
