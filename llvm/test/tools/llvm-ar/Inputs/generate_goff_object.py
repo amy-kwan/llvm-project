@@ -4,14 +4,19 @@
 A GOFF file is a sequence of 80-byte records. This script emits:
   HDR + ED (parent section) + LD (exported symbol) + END
 
-The three z/OS archive attribute bits come from ESD record fields:
-  bit 2 (0x4): 64-bit  - LD AMODE (record byte 60) == 4
-  bit 1 (0x2): XPLink  - LD LinkageType bit (byte 66 bit 2 from MSB, mask 0x20)
-  bit 0 (0x1): WSA     - ED NameSpaceId (byte 40) == 3 (ESD_NS_Parts)
+The generated object matches real z/OS clang output:
+  - AMODE is always 64-bit (ESD_AMODE_64)
+  - LinkageType is always XPLink (ESD_LT_XPLink)
+  - WSA (bit 0) is set when --wsa is passed, i.e. the parent ED uses
+    ESD_NS_Parts (writable static area / data section)
+
+This produces the two realistic archive attribute values:
+  0x6 [64-bit + XPLink]       -- function or read-only data  (default)
+  0x7 [64-bit + XPLink + WSA] -- writable data               (--wsa)
 
 Usage:
-  python generate_goff_object.py --output foo.o --name foo --amode64 --xplink
-  python generate_goff_object.py --output bar.o --name bar --wsa
+  python generate_goff_object.py --output func.o --name myfunc
+  python generate_goff_object.py --output data.o --name mydata --wsa
 """
 
 import argparse
@@ -29,67 +34,77 @@ ASCII_TO_EBCDIC = (
     0x97,0x98,0x99,0xA2,0xA3,0xA4,0xA5,0xA6,0xA7,0xA8,0xA9,0xC0,0x4F,0xD0,0xA1,0x07,
 )
 
+# ESD_AMODE_64 = 4, ESD_LT_XPLink sets bit 2 from MSB of record byte 66 (0x20),
+# ESD_NS_Parts = 3, ESD_NS_NormalName = 1, ESD_EXE_CODE = 2, ESD_BSC_Section = 1.
 
 def record(rtype, payload=b''):
     """Wrap payload in an 80-byte GOFF record (0x03 prefix + type byte)."""
     return struct.pack('BB', 0x03, rtype) + bytes(payload).ljust(78, b'\x00')
 
 
-def make_esd(esd_id, parent_id, sym_type, name_ebcdic,
-             namespace=1, amode=2, xplink=False):
-    """Build an ESD record. All byte offsets are record-absolute.
-      byte  3: symbol type (1=ED, 2=LD)
+def make_ed(esd_id, namespace):
+    """Build an ED record (ElementDefinition). All byte offsets are record-absolute.
+      byte  3: symbol type = 1 (ED)
       bytes 4-7: ESD ID
-      bytes 8-11: parent ESD ID
       byte 40: NameSpaceId (1=Normal, 3=Parts/WSA)
-      byte 60: AMODE (2=31-bit, 4=64-bit)
-      byte 66: bit 2 from MSB (0x20) = XPLink
-      bytes 70-71: name length; bytes 72+: name (EBCDIC)
+      byte 65: bits 4-7 = BindingScope = 1 (ESD_BSC_Section) — ED is never global
     """
     p = bytearray(78)
-    p[1] = sym_type
+    p[1] = 1                            # ESD_ST_ElementDefinition
+    struct.pack_into('>I', p, 2, esd_id)
+    p[38] = namespace
+    p[63] = 1 << 4                      # BindingScope = ESD_BSC_Section
+    return record(0x00, p)
+
+
+def make_ld(esd_id, parent_id, name_ebcdic):
+    """Build an LD record (LabelDefinition). All byte offsets are record-absolute.
+      byte  3: symbol type = 2 (LD)
+      bytes 4-7: ESD ID
+      bytes 8-11: parent ESD ID
+      byte 60: AMODE = 4 (ESD_AMODE_64)
+      byte 63: bits 5-7 = Executable = 2 (ESD_EXE_CODE)
+      byte 66: bit 2 from MSB (0x20) = XPLink (ESD_LT_XPLink)
+      bytes 70-71: name length; bytes 72+: name (EBCDIC, max 8 bytes)
+    """
+    p = bytearray(78)
+    p[1] = 2                            # ESD_ST_LabelDefinition
     struct.pack_into('>I', p, 2, esd_id)
     struct.pack_into('>I', p, 6, parent_id)
-    p[38] = namespace
-    p[58] = amode
-    if xplink:
-        p[64] |= 0x20  # record byte 66
+    p[58] = 4                           # ESD_AMODE_64
+    p[61] = 2                           # ESD_EXE_CODE
+    p[64] |= 0x20                       # ESD_LT_XPLink
     name = name_ebcdic[:8]
     struct.pack_into('>H', p, 68, len(name))
     p[70:70 + len(name)] = name
-    return record(0x00, p)  # RT_ESD = 0
+    return record(0x00, p)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--output',  required=True)
-    ap.add_argument('--name',    required=True)
-    ap.add_argument('--amode64', action='store_true')
-    ap.add_argument('--xplink',  action='store_true')
-    ap.add_argument('--wsa',     action='store_true')
+    ap.add_argument('--output', required=True)
+    ap.add_argument('--name',   required=True)
+    ap.add_argument('--wsa',    action='store_true',
+                    help='use ESD_NS_Parts on the parent ED (writable static area)')
     args = ap.parse_args()
 
     name_e = bytes(ASCII_TO_EBCDIC[b] for b in args.name.encode('ascii'))
-    amode  = 4 if args.amode64 else 2   # ESD_AMODE_64 : ESD_AMODE_31
-    ns     = 3 if args.wsa     else 1   # ESD_NS_Parts : ESD_NS_NormalName
+    ns = 3 if args.wsa else 1           # ESD_NS_Parts : ESD_NS_NormalName
 
-    # HDR: required first record; architecture level = 1 at payload byte 50.
-    hdr_p = bytearray(78)
-    struct.pack_into('>H', hdr_p, 50, 1)
-    hdr = record(0xF0, hdr_p)  # RT_HDR = 15 << 4
+    hdr = record(0xF0, bytearray(78))   # RT_HDR
 
     # ED (ESD ID 1): zero-length parent section. The zero length + LD child
     # triggers the GOFFObjectFile "case 2b" that makes the LD symbol visible.
-    ed = make_esd(1, 0, 1, b'', namespace=ns)  # sym_type 1 = ElementDefinition
+    # BindingScope=Section ensures getSymbolFlags() does not mark the ED global.
+    ed = make_ed(1, ns)
 
-    # LD (ESD ID 2): the exported symbol. BindingScope defaults to 0
-    # (Unspecified), which is != ESD_BSC_Section and != ESD_BSC_Module so
-    # GOFFObjectFile sets SF_Global and isArchiveSymbol() accepts it.
-    ld = make_esd(2, 1, 2, name_e,             # sym_type 2 = LabelDefinition
-                  amode=amode, xplink=args.xplink)
+    # LD (ESD ID 2): the exported symbol. BindingScope=0 (Unspecified) is
+    # != ESD_BSC_Section and != ESD_BSC_Module so getSymbolFlags() sets
+    # SF_Global and isArchiveSymbol() accepts it.
+    ld = make_ld(2, 1, name_e)
 
-    end = record(0x40)  # RT_END = 4 << 4
+    end = record(0x40)                  # RT_END
 
     with open(args.output, 'wb') as f:
         f.write(hdr + ed + ld + end)
