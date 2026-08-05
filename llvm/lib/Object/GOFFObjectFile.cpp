@@ -379,12 +379,15 @@ uint32_t GOFFObjectFile::getZOSSymbolArchiveAttributes(DataRefImpl Symb) const {
   const uint8_t *SymRecord = getSymbolEsdRecord(Symb);
   uint32_t Attrs = 0;
 
-  // Bit 2 (0x4): 64-bit — AMODE is ESD_AMODE_64. Only set on LD/ER records;
-  // PR records (data symbols) do not carry AMODE, so bit 2 is not set for them.
-  GOFF::ESDAmode Amode;
-  ESDRecord::getAmode(SymRecord, Amode);
-  if (Amode == GOFF::ESD_AMODE_64)
-    Attrs |= 0x4;
+  // Bit 2 (0x4): 64-bit — AMODE is only defined for LD/ER records.
+  GOFF::ESDSymbolType SymType;
+  ESDRecord::getSymbolType(SymRecord, SymType);
+  if (SymType != GOFF::ESD_ST_PartReference) {
+    GOFF::ESDAmode Amode;
+    ESDRecord::getAmode(SymRecord, Amode);
+    if (Amode == GOFF::ESD_AMODE_64)
+      Attrs |= 0x4;
+  }
 
   // Bit 1 (0x2): XPLink — LinkageType is ESD_LT_XPLink.
   GOFF::ESDLinkageType LinkageType;
