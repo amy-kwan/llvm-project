@@ -4264,6 +4264,10 @@ SDValue SystemZTargetLowering::lowerGlobalTLSAddress(GlobalAddressSDNode *Node,
                                                      SelectionDAG &DAG) const {
   if (DAG.getTarget().useEmulatedTLS())
     return LowerToTLSEmulatedModel(Node, DAG);
+
+  if (Subtarget.isTargetzOS())
+    return lowerGlobalTLSAddresszOS(Node, DAG);
+
   SDLoc DL(Node);
   const GlobalValue *GV = Node->getGlobal();
   EVT PtrVT = getPointerTy(DAG.getDataLayout());
@@ -4351,6 +4355,83 @@ SDValue SystemZTargetLowering::lowerGlobalTLSAddress(GlobalAddressSDNode *Node,
 
   // Add the base and offset together.
   return DAG.getNode(ISD::ADD, DL, PtrVT, TP, Offset);
+}
+
+SDValue SystemZTargetLowering::lowerGlobalTLSAddresszOS(
+    GlobalAddressSDNode *Node, SelectionDAG &DAG) const {
+  SDLoc DL(Node);
+  EVT PtrVT = getPointerTy(DAG.getDataLayout());
+  SDValue Chain = DAG.getEntryNode();
+
+  // Load the descriptor address from the ADA. The descriptor has the same
+  // name as the original GV.
+  const GlobalValue *GV = cast<GlobalVariable>(Node->getGlobal());
+  assert(GV && "No GlobalValue for TLS address");
+  SDValue DescriptorPtr = getADAEntry(DAG, GV, DL, PtrVT);
+
+  if (!Subtarget.isTargetXPLINK64())
+    report_fatal_error("32-bit z/OS TLS is not yet supported");
+
+  // Load pointer to LE Anchor Area, PSALAA. In 64bit, this is __ptr32.
+  // The sequence with AND is matched into LLGT instruction.
+  SDValue PSA = DAG.getIntPtrConstant(1208, DL);
+  SDValue LAAPtr = DAG.getNode(
+      ISD::AND, DL, MVT::i64,
+      DAG.getZExtOrTrunc(
+          DAG.getLoad(MVT::i32, DL, Chain, PSA, MachinePointerInfo(),
+                      MaybeAlign(4),
+                      MachineMemOperand::MODereferenceable |
+                          MachineMemOperand::MOInvariant),
+          DL, MVT::i64),
+      DAG.getConstant(0x7fffffff, DL, MVT::i64));
+
+  // Load pointer to LE Library Control Area.
+  SDValue LLCAPtr = DAG.getLoad(
+      PtrVT, DL, Chain,
+      DAG.getMemBasePlusOffset(LAAPtr, TypeSize::getFixed(88), DL),
+      MachinePointerInfo(), MaybeAlign(4),
+      MachineMemOperand::MODereferenceable | MachineMemOperand::MOInvariant);
+
+  // Load pointer to LE Common Anchor Area.
+  SDValue LCAAPtr = DAG.getLoad(
+      PtrVT, DL, Chain,
+      DAG.getMemBasePlusOffset(LLCAPtr, TypeSize::getFixed(8), DL),
+      MachinePointerInfo(), MaybeAlign(4),
+      MachineMemOperand::MODereferenceable | MachineMemOperand::MOInvariant);
+
+  // Load pointer to fast vector.
+  SDValue FastVecPtr = DAG.getZExtOrTrunc(
+      DAG.getLoad(
+          MVT::i32, DL, DAG.getEntryNode(),
+          DAG.getMemBasePlusOffset(LCAAPtr, TypeSize::getFixed(1096), DL),
+          MachinePointerInfo(), MaybeAlign(4),
+          MachineMemOperand::MODereferenceable |
+              MachineMemOperand::MOInvariant),
+      DL, MVT::i64);
+
+  // Add offset to __tls_get_addr.
+  SDValue TLSGetAddr = DAG.getNode(ISD::ADD, DL, PtrVT, FastVecPtr,
+                                   DAG.getConstant(128, DL, PtrVT));
+
+  CallingConv::ID CC = CallingConv::C;
+
+  // Call __tls_get_addr() via the function pointer.
+  TargetLowering::ArgListTy Args;
+  TargetLowering::ArgListEntry Entry(
+      DescriptorPtr,
+      DescriptorPtr.getValueType().getTypeForEVT(*DAG.getContext()));
+  Args.push_back(Entry);
+
+  Type *RetTy = PtrVT.getTypeForEVT(*DAG.getContext());
+  TargetLowering::CallLoweringInfo CLI(DAG);
+  CLI.setDebugLoc(DL)
+      .setChain(Chain)
+      .setCallee(CC, RetTy, TLSGetAddr, std::move(Args))
+      .setNoReturn(false)
+      .setDiscardResult(false)
+      .setSExtResult(false)
+      .setZExtResult(false);
+  return LowerCallTo(CLI).first;
 }
 
 SDValue SystemZTargetLowering::lowerBlockAddress(BlockAddressSDNode *Node,

@@ -322,6 +322,8 @@ private:
                             SelectionDAG &DAG, unsigned Opcode,
                             SDValue GOTOffset) const;
   SDValue lowerThreadPointer(const SDLoc &DL, SelectionDAG &DAG) const;
+  SDValue lowerGlobalTLSAddresszOS(GlobalAddressSDNode *Node,
+                                   SelectionDAG &DAG) const;
   SDValue lowerGlobalTLSAddress(GlobalAddressSDNode *Node,
                                 SelectionDAG &DAG) const;
   SDValue lowerBlockAddress(BlockAddressSDNode *Node,

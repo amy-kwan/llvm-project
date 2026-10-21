@@ -19,11 +19,13 @@
 #include "SystemZMachineFunctionInfo.h"
 #include "SystemZSubtarget.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalObject.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInstBuilder.h"
@@ -811,6 +813,60 @@ void SystemZXPLINKAsmPrinter::emitGlobalAlias(const Module &M,
     return AsmPrinter::emitGlobalAlias(M, GA);
 
   // Aliased function labels have already been emitted for z/OS
+}
+
+void SystemZXPLINKAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
+  // Non-TLS variables use the default path.
+  if (!GV->isThreadLocal()) {
+    AsmPrinter::emitGlobalVariable(GV);
+    return;
+  }
+
+  if (GV->isDeclaration())
+    return;
+
+  const unsigned PointerSize = getDataLayout().getPointerSize();
+  const DataLayout &DL = GV->getParent()->getDataLayout();
+
+  // TLS symbol <name>@tls@.
+  std::string TLSName = (Twine(GV->getName()) + "@tls@").str();
+  MCSymbolGOFF *TLSSym = static_cast<MCSymbolGOFF *>(
+      OutContext.getOrCreateSymbol(TLSName));
+  TLSSym->setTLS(true);
+  MCSection *TLSSection =
+      getObjFileLowering().SectionForGlobal(GV, SectionKind::getThreadData(),
+                                            TM);
+  OutStreamer->switchSection(TLSSection);
+  OutStreamer->emitLabel(TLSSym);
+  emitGlobalConstant(DL, GV->getInitializer()); // Emit bytes of TLS data.
+
+  // Descriptor symbol <name>.
+  MCSymbol *DescSym = getSymbol(GV);
+  MCSection *DescSection =
+      getObjFileLowering().SectionForGlobal(GV, SectionKind::getData(), TM);
+  OutStreamer->switchSection(DescSection);
+  OutStreamer->emitLabel(DescSym);
+
+  // Word 0: A(@@TLS@MOD@ID).
+  MCSymbol *TlsModuleId = OutContext.getOrCreateSymbol("@@TLS@MOD@ID");
+  // TlsModuleId->setAlignment(Align(4));
+  // TlsModuleId->setExecutable(GOFF::ESD_EXE_DATA);
+  OutStreamer->emitValue(
+      MCSymbolRefExpr::create(TlsModuleId, SystemZ::S_None, OutContext),
+      PointerSize);
+
+  // Word 1: A(<name>@tls@ - @@TLS@BEGIN) — offset of storage from TLS base.
+  MCSymbol *TlsBegin = OutContext.getOrCreateSymbol("@@TLS@BEGIN");
+  // TlsBegin->setAlignment(Align(4));
+  // TlsBegin->setExecutable(GOFF::ESD_EXE_DATA);
+  OutStreamer->emitValue(
+      MCSpecifierExpr::create(
+          MCBinaryExpr::createSub(
+              MCSymbolRefExpr::create(TLSSym, SystemZ::S_None, OutContext),
+              MCSymbolRefExpr::create(TlsBegin, SystemZ::S_None, OutContext),
+              OutContext),
+          SystemZ::S_None, OutContext),
+      PointerSize);
 }
 
 const MCExpr *SystemZXPLINKAsmPrinter::lowerConstant(const Constant *CV,

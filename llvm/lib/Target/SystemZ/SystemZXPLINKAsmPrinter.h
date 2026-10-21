@@ -121,6 +121,7 @@ public:
   void emitFunctionBodyEnd() override;
   void emitStartOfAsmFile(Module &M) override;
   void emitGlobalAlias(const Module &M, const GlobalAlias &GA) override;
+  void emitGlobalVariable(const GlobalVariable *GV) override;
   const MCExpr *lowerConstant(const Constant *CV,
                               const Constant *BaseCV = nullptr,
                               uint64_t Offset = 0) override;
