@@ -2866,6 +2866,25 @@ MCSection *TargetLoweringObjectFileXCOFF::getSectionForLSDA(
 //===----------------------------------------------------------------------===//
 TargetLoweringObjectFileGOFF::TargetLoweringObjectFileGOFF() = default;
 
+MCSymbol *
+TargetLoweringObjectFileGOFF::getTargetSymbol(const GlobalValue *GV,
+                                              const TargetMachine &TM) const {
+  // For a TLS variable, x, two MC symbols are used:
+  // x       - The TLS descriptor with original linkage/visbility.
+  // x@tls@  - The TLS storage symbol with internal linkage, with sort key 150
+  //           This symbol is created here so that the GOFFObjectWriter can
+  //           assign the correct SortKey (150) to this symbol.
+  if (GV->isThreadLocal()) {
+    SmallString<128> NameStr;
+    getNameWithPrefix(NameStr, GV, TM);
+    NameStr += "@tls@";
+    MCSymbolGOFF *Sym = static_cast<MCSymbolGOFF *>(
+        getContext().getOrCreateSymbol(NameStr));
+    Sym->setTLS(true);
+  }
+  return nullptr;
+}
+
 void TargetLoweringObjectFileGOFF::initialize(MCContext &Ctx,
                                               const TargetMachine &TM,
                                               const Module &M) {

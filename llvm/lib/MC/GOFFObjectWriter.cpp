@@ -404,6 +404,18 @@ void GOFFWriter::defineExtern(const MCSymbolGOFF &Symbol) {
                   GOFF::PRAttr{/*IsRenamable*/ false, Symbol.getCodeData(),
                                Symbol.getBindingStrength(), Symbol.getLinkage(),
                                Symbol.getBindingScope(), 0});
+    // Assign TLS sort keys so the binder places all TLS data contiguously
+    // between the LE-defined @@TLS@BEGIN (101) and @@TLS@END (199).
+    // Individual TLS variables get sort key 150.
+    if (Symbol.isTLS()) {
+      PR.SortKey = 150;
+    } else {
+      StringRef Name = Symbol.getExternalName();
+      if (Name == "@@TLS@BEGIN")
+        PR.SortKey = 101;
+      else if (Name == "@@TLS@END")
+        PR.SortKey = 199;
+    }
     writeSymbol(PR);
   } else {
     GOFFSymbol ER(Symbol.getExternalName(), Symbol.getIndex(),

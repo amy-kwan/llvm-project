@@ -334,6 +334,9 @@ public:
   TargetLoweringObjectFileGOFF();
   ~TargetLoweringObjectFileGOFF() override = default;
 
+  MCSymbol *getTargetSymbol(const GlobalValue *GV,
+                            const TargetMachine &TM) const override;
+
   void initialize(MCContext &Ctx, const TargetMachine &TM,
                   const Module &M) override;
 
