@@ -300,6 +300,19 @@ void DwarfCompileUnit::addLocationAttribute(
           addUInt(*Loc, dwarf::DW_FORM_data1, dwarf::DW_OP_plus);
         } else if (Asm->TM.useEmulatedTLS()) {
           // TODO: add debug info for emulated thread local mode.
+        } else if (Asm->TM.getTargetTriple().isOSzOS()) {
+          // z/OS TLS: the descriptor symbol has the original GV name.
+          // Emit DW_OP_addr <descriptor> + DW_OP_form_tls_address.
+          // The debugger calls __tls_get_addr(descriptor_ptr) to resolve
+          // the per-thread storage address at debug time.
+          // getDebugThreadLocalSymbol() returns MCSymbolRefExpr::create(Sym)
+          // because Sym is already the descriptor (no IR renaming).
+          const MCExpr *TLSExpr =
+              Asm->getObjFileLowering().getDebugThreadLocalSymbol(Sym);
+          const MCSymbol &DescSym =
+              cast<MCSymbolRefExpr>(TLSExpr)->getSymbol();
+          addOpAddress(*Loc, &DescSym);
+          addUInt(*Loc, dwarf::DW_FORM_data1, dwarf::DW_OP_form_tls_address);
         } else {
           // FIXME: Make this work with -gsplit-dwarf.
           // Based on GCC's support for TLS:
