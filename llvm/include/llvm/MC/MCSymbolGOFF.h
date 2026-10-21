@@ -40,6 +40,7 @@ class MCSymbolGOFF : public MCSymbol {
     SF_Weak = 0x02,      // Symbol is weak.
     SF_Indirect = 0x4,   // Symbol referenced indirectly.
     SF_Renameable = 0x8, // Symbol can be renamed.
+    SF_TLS = 0x10,      // Symbol is TLS storage (WSA, sort key 150).
   };
 
 public:
@@ -74,6 +75,11 @@ public:
     modifyFlags(Value ? SF_Indirect : 0, SF_Indirect);
   }
   bool isIndirect() const { return getFlags() & SF_Indirect; }
+
+  void setTLS(bool Value = true) {
+    modifyFlags(Value ? SF_TLS : 0, SF_TLS);
+  }
+  bool isTLS() const { return getFlags() & SF_TLS; }
 
   void setWeak(bool Value = true) { modifyFlags(Value ? SF_Weak : 0, SF_Weak); }
   bool isWeak() const { return getFlags() & SF_Weak; }
