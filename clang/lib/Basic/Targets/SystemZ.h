@@ -56,7 +56,7 @@ public:
       if (Triple.isArch64Bit()) {
         AddrSpaceMap = &ZOSAddressMap;
       }
-      TLSSupported = false;
+      TLSSupported = Triple.isArch64Bit();
       HasBuiltinZOSVaList = true;
 
       // All vector types are default aligned on an 8-byte boundary, even if the
