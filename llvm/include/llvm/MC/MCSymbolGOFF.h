@@ -32,6 +32,10 @@ class MCSymbolGOFF : public MCSymbol {
   // Associated data area of the section. Needs to be emitted first.
   MCSectionGOFF *ADA = nullptr;
 
+  // Sort key (priority) of the PR emitted for an undefined data symbol. Zero
+  // means that no priority is assigned.
+  uint32_t SortKey = 0;
+
   GOFF::ESDExecutable CodeData = GOFF::ESDExecutable::ESD_EXE_Unspecified;
   GOFF::ESDLinkageType Linkage = GOFF::ESDLinkageType::ESD_LT_XPLink;
 
@@ -56,6 +60,9 @@ public:
   }
   MCSectionGOFF *getADA() const { return ADA; }
 
+  void setSortKey(uint32_t Key) { SortKey = Key; }
+  uint32_t getSortKey() const { return SortKey; }
+
   bool isExternal() const { return IsExternal; }
   void setExternal(bool Value) const { IsExternal = Value; }
 
@@ -75,11 +82,6 @@ public:
     modifyFlags(Value ? SF_Indirect : 0, SF_Indirect);
   }
   bool isIndirect() const { return getFlags() & SF_Indirect; }
-
-  void setTLS(bool Value = true) {
-    modifyFlags(Value ? SF_TLS : 0, SF_TLS);
-  }
-  bool isTLS() const { return getFlags() & SF_TLS; }
 
   void setWeak(bool Value = true) { modifyFlags(Value ? SF_Weak : 0, SF_Weak); }
   bool isWeak() const { return getFlags() & SF_Weak; }

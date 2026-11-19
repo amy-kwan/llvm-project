@@ -111,6 +111,9 @@ public:
     static_cast<MCSymbolGOFF *>(Sym)->setADA(
         static_cast<MCSectionGOFF *>(Section));
   }
+  void emitSortKey(MCSymbol *Sym, uint32_t Key) {
+    static_cast<MCSymbolGOFF *>(Sym)->setSortKey(Key);
+  }
 
   void emitPPA1(PPA1Info &Info);
   virtual const MCExpr *createWordDiffExpr(MCContext &Ctx, const MCSymbol *Hi,

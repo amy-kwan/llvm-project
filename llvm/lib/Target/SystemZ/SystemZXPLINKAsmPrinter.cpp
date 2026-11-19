@@ -903,11 +903,11 @@ void SystemZXPLINKAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   const unsigned PointerSize = getDataLayout().getPointerSize();
   const DataLayout &DL = GV->getParent()->getDataLayout();
 
-  // TLS symbol <name>@tls@.
-  std::string TLSName = (Twine(GV->getName()) + "@tls@").str();
-  MCSymbolGOFF *TLSSym = static_cast<MCSymbolGOFF *>(
-      OutContext.getOrCreateSymbol(TLSName));
-  TLSSym->setTLS(true);
+  // TLS storage symbol <name>@tls@. It must have the same name as the PR
+  // section returned by SelectSectionForGlobal() for a thread-local kind.
+  MCSymbol *DescSym = getSymbol(GV);
+  MCSymbol *TLSSym =
+      OutContext.getOrCreateSymbol(Twine(DescSym->getName()) + "@tls@");
   MCSection *TLSSection =
       getObjFileLowering().SectionForGlobal(GV, SectionKind::getThreadData(),
                                             TM);
@@ -916,10 +916,12 @@ void SystemZXPLINKAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   emitGlobalConstant(DL, GV->getInitializer()); // Emit bytes of TLS data.
 
   // Descriptor symbol <name>.
-  MCSymbol *DescSym = getSymbol(GV);
   MCSection *DescSection =
       getObjFileLowering().SectionForGlobal(GV, SectionKind::getData(), TM);
   OutStreamer->switchSection(DescSection);
+  emitVisibility(DescSym, GV->getVisibility(), /*IsDefinition=*/true);
+  emitLinkage(GV, DescSym);
+  OutStreamer->emitSymbolAttribute(DescSym, MCSA_ELF_TypeObject);
   OutStreamer->emitLabel(DescSym);
 
   // Word 0: A(@@TLS@MOD@ID).
@@ -933,6 +935,7 @@ void SystemZXPLINKAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   // Word 1: A(<name>@tls@ - @@TLS@BEGIN) — offset of storage from TLS base.
   MCSymbol *TlsBegin = OutContext.getOrCreateSymbol("@@TLS@BEGIN");
   ZOS->emitADA(TlsBegin, getObjFileLowering().getADASection());
+  ZOS->emitSortKey(TlsBegin, GOFF::TLSBeginSortKey);
   OutStreamer->emitSymbolAttribute(TlsBegin, MCSA_ELF_TypeObject);
   OutStreamer->emitValue(
       MCSpecifierExpr::create(
