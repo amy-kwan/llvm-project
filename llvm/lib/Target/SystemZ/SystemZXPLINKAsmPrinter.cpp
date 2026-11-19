@@ -899,6 +899,7 @@ void SystemZXPLINKAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   if (GV->isDeclaration())
     return;
 
+  auto *ZOS = getTargetStreamer();
   const unsigned PointerSize = getDataLayout().getPointerSize();
   const DataLayout &DL = GV->getParent()->getDataLayout();
 
@@ -923,6 +924,7 @@ void SystemZXPLINKAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
 
   // Word 0: A(@@TLS@MOD@ID).
   MCSymbol *TlsModuleId = OutContext.getOrCreateSymbol("@@TLS@MOD@ID");
+  ZOS->emitADA(TlsModuleId, getObjFileLowering().getADASection());
   OutStreamer->emitSymbolAttribute(TlsModuleId, MCSA_ELF_TypeObject);
   OutStreamer->emitValue(
       MCSymbolRefExpr::create(TlsModuleId, SystemZ::S_None, OutContext),
@@ -930,6 +932,7 @@ void SystemZXPLINKAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
 
   // Word 1: A(<name>@tls@ - @@TLS@BEGIN) — offset of storage from TLS base.
   MCSymbol *TlsBegin = OutContext.getOrCreateSymbol("@@TLS@BEGIN");
+  ZOS->emitADA(TlsBegin, getObjFileLowering().getADASection());
   OutStreamer->emitSymbolAttribute(TlsBegin, MCSA_ELF_TypeObject);
   OutStreamer->emitValue(
       MCSpecifierExpr::create(
