@@ -70,13 +70,6 @@ struct LDAttr {
   GOFF::ESDBindingScope BindingScope = GOFF::ESD_BSC_Unspecified;
 };
 
-// Sort keys (the "priority" of a PR) used by the binder to order parts within
-// a class. The Language Environment brackets the thread-local storage of a
-// module with the parts @@TLS@BEGIN and @@TLS@END; all thread-local data must
-// be ordered between them so that it becomes part of the per-thread template.
-constexpr uint32_t TLSBeginSortKey = 101;
-constexpr uint32_t TLSDataSortKey = 150;
-
 // Attributes for PR symbols.
 struct PRAttr {
   bool IsRenameable = true;

@@ -2968,45 +2968,20 @@ MCSection *TargetLoweringObjectFileGOFF::SelectSectionForGlobal(
     const GlobalObject *GO, SectionKind Kind, const TargetMachine &TM) const {
   auto *Symbol = TM.getSymbol(GO);
 
-  // For a thread-local variable x, two data objects are emitted: the
-  // descriptor x (requested with a data kind, see below) and the storage
-  // x@tls@ (requested with a thread-local kind). The storage is a part of the
-  // WSA with a sort key that places it between @@TLS@BEGIN and @@TLS@END, so
-  // that it becomes part of the template copied for each thread. It is only
-  // referenced through the descriptor and is thus never visible outside of the
-  // object file.
-  if (Kind.isThreadLocal()) {
-    MaybeAlign Alignment;
-    if (auto *V = dyn_cast<GlobalVariable>(GO))
-      Alignment = V->getAlign();
-    std::string StorageName = (Symbol->getName() + "@tls@").str();
-    MCSectionGOFF *SD = getContext().getGOFFSection(
-        SectionKind::getMetadata(), StorageName,
-        GOFF::SDAttr{GOFF::ESD_TA_Unspecified, GOFF::ESD_BSC_Section});
-    MCSectionGOFF *ED = getContext().getGOFFSection(
-        SectionKind::getMetadata(), GOFF::CLASS_WSA,
-        GOFF::EDAttr{false, GOFF::ESD_RMODE_64, GOFF::ESD_NS_Parts,
-                     GOFF::ESD_TS_ByteOriented, GOFF::ESD_BA_Merge,
-                     GOFF::ESD_LB_Deferred, GOFF::ESD_RQ_0, 0},
-        SD);
-    ED->setAlignment(Alignment.value_or(llvm::Align(8)));
-    MCSectionGOFF *PR = getContext().getGOFFSection(
-        Kind, StorageName,
-        GOFF::PRAttr{false, GOFF::ESD_EXE_DATA, GOFF::ESD_BST_Strong,
-                     GOFF::ESD_LT_XPLink, GOFF::ESD_BSC_Section,
-                     GOFF::TLSDataSortKey},
-        ED);
-    // The binder rejects zero-length PR sections.
-    PR->setRequiresNonZeroLength();
-    return PR;
-  }
+  // The storage of a thread-local variable x is emitted as a separate local
+  // part x@tls@. The descriptor x is a regular data object.
+  bool IsTLSStorage = Kind.isThreadLocal();
 
   // Read-only data stays in the code section only if it is local: references
   // from other translation units are always parts in the WSA.
-  if (Kind.isBSS() || Kind.isData() || Kind.isReadOnlyWithRel() ||
+  if (Kind.isBSS() || Kind.isData() || IsTLSStorage ||
+      Kind.isReadOnlyWithRel() ||
       (Kind.isReadOnly() && !GO->hasLocalLinkage())) {
+    std::string Name = Symbol->getName().str();
+    if (IsTLSStorage)
+      Name += "@tls@";
     GOFF::ESDBindingScope PRBindingScope =
-        GO->hasExternalLinkage()
+        GO->hasExternalLinkage() && !IsTLSStorage
             ? (GO->hasDefaultVisibility() ? GOFF::ESD_BSC_ImportExport
                                           : GOFF::ESD_BSC_Library)
             : GOFF::ESD_BSC_Section;
@@ -3019,7 +2994,7 @@ MCSection *TargetLoweringObjectFileGOFF::SelectSectionForGlobal(
     else if (auto *V = dyn_cast<GlobalVariable>(GO))
       Alignment = V->getAlign();
     MCSectionGOFF *SD = getContext().getGOFFSection(
-        SectionKind::getMetadata(), Symbol->getName(),
+        SectionKind::getMetadata(), Name,
         GOFF::SDAttr{GOFF::ESD_TA_Unspecified, SDBindingScope});
     MCSectionGOFF *ED = getContext().getGOFFSection(
         SectionKind::getMetadata(), GOFF::CLASS_WSA,
@@ -3029,7 +3004,7 @@ MCSection *TargetLoweringObjectFileGOFF::SelectSectionForGlobal(
         SD);
     ED->setAlignment(Alignment.value_or(llvm::Align(8)));
     MCSectionGOFF *PR = getContext().getGOFFSection(
-        Kind, Symbol->getName(),
+        Kind, Name,
         GOFF::PRAttr{false, GOFF::ESD_EXE_DATA, GOFF::ESD_BST_Strong,
                      GOFF::ESD_LT_XPLink, PRBindingScope, 0},
         ED);

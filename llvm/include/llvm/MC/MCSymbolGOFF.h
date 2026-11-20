@@ -32,8 +32,7 @@ class MCSymbolGOFF : public MCSymbol {
   // Associated data area of the section. Needs to be emitted first.
   MCSectionGOFF *ADA = nullptr;
 
-  // Sort key (priority) of the PR emitted for an undefined data symbol. Zero
-  // means that no priority is assigned.
+  // Sort key (priority) of the PR emitted for this symbol if it is undefined.
   uint32_t SortKey = 0;
 
   GOFF::ESDExecutable CodeData = GOFF::ESDExecutable::ESD_EXE_Unspecified;

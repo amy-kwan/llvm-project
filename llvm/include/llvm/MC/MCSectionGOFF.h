@@ -122,6 +122,11 @@ public:
     return GOFF::ESD_TS_ByteOriented;
   }
 
+  void setSortKey(uint32_t Key) {
+    assert(isPR() && "Not a PR section");
+    PRAttributes.SortKey = Key;
+  }
+
   bool requiresNonZeroLength() const { return RequiresNonZeroLength; }
   void setRequiresNonZeroLength() { RequiresNonZeroLength = true; }
 

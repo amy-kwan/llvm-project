@@ -114,6 +114,9 @@ public:
   void emitSortKey(MCSymbol *Sym, uint32_t Key) {
     static_cast<MCSymbolGOFF *>(Sym)->setSortKey(Key);
   }
+  void emitSortKey(MCSection *Sec, uint32_t Key) {
+    static_cast<MCSectionGOFF *>(Sec)->setSortKey(Key);
+  }
 
   void emitPPA1(PPA1Info &Info);
   virtual const MCExpr *createWordDiffExpr(MCContext &Ctx, const MCSymbol *Hi,

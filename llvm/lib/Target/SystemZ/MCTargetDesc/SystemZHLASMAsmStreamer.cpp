@@ -711,8 +711,10 @@ void SystemZHLASMAsmStreamer::finishImpl() {
       continue;
     auto &Sym = static_cast<MCSymbolGOFF &>(const_cast<MCSymbol &>(Symbol));
     if (Sym.getCodeData() == GOFF::ESD_EXE_DATA) {
-      OS << Sym.getADA()->getParent()->getExternalName() << " CATTR PART("
-         << Sym.getName() << ")";
+      OS << Sym.getADA()->getParent()->getExternalName() << " CATTR ";
+      if (Sym.getSortKey())
+        OS << "PRIORITY(" << Sym.getSortKey() << "),";
+      OS << "PART(" << Sym.getName() << ")";
       EmitEOL();
     } else {
       OS.indent(Indent) << (Sym.isWeak() ? "WXTRN" : "EXTRN") << " "
