@@ -4434,14 +4434,12 @@ SDValue SystemZTargetLowering::lowerGlobalTLSAddresszOS(
   EVT PtrVT = getPointerTy(DAG.getDataLayout());
   SDValue Chain = DAG.getEntryNode();
 
-  // Load the descriptor address from the ADA. The descriptor has the same
-  // name as the original GV.
-  const GlobalValue *GV = cast<GlobalVariable>(Node->getGlobal());
-  assert(GV && "No GlobalValue for TLS address");
-  SDValue DescriptorPtr = getADAEntry(DAG, GV, DL, PtrVT);
-
   if (!Subtarget.isTargetXPLINK64())
     report_fatal_error("32-bit z/OS TLS is not yet supported");
+
+  // Load the descriptor address from the ADA. The descriptor has the same
+  // name as the original GV.
+  SDValue DescriptorPtr = getADAEntry(DAG, Node->getGlobal(), DL, PtrVT);
 
   // Load pointer to LE Anchor Area, PSALAA. In 64bit, this is __ptr32.
   // The sequence with AND is matched into LLGT instruction.
